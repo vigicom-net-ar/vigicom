@@ -2,6 +2,42 @@
 require_once __DIR__ . '/../config/config.php';
 require_once __DIR__ . '/../config/database.php';
 
+const CRIPTO_CLAVE_DEFECTO = '0123456789';
+
+function cripto_encriptar(string $cadena, string $clave = ''): string
+{
+    if ($clave === '') {
+        $clave = CRIPTO_CLAVE_DEFECTO;
+    }
+    $resultado = '';
+    $len_clave = strlen($clave);
+    for ($i = 0, $n = strlen($cadena); $i < $n; $i++) {
+        $char    = $cadena[$i];
+        $keychar = substr($clave, ($i % $len_clave) - 1, 1);
+        $resultado .= chr(ord($char) + ord($keychar));
+    }
+    return base64_encode($resultado);
+}
+
+function cripto_desencriptar(string $cadena, string $clave = ''): string
+{
+    if ($clave === '') {
+        $clave = CRIPTO_CLAVE_DEFECTO;
+    }
+    $cadena    = base64_decode($cadena, true);
+    if ($cadena === false) {
+        return '';
+    }
+    $resultado = '';
+    $len_clave = strlen($clave);
+    for ($i = 0, $n = strlen($cadena); $i < $n; $i++) {
+        $char    = $cadena[$i];
+        $keychar = substr($clave, ($i % $len_clave) - 1, 1);
+        $resultado .= chr(ord($char) - ord($keychar));
+    }
+    return $resultado;
+}
+
 function usuario_actual(): ?array
 {
     return $_SESSION['usuario'] ?? null;
@@ -15,31 +51,40 @@ function requerir_login(): void
     }
 }
 
-function intentar_login(string $email, string $password): bool
+function intentar_login(string $correo, string $password): bool
 {
     $stmt = db()->prepare(
-        'SELECT id, nombre, email, password_hash, rol, activo
-         FROM usuarios WHERE email = :email LIMIT 1'
+        'SELECT id, nombre, correo, contrasena, roles, estado
+         FROM usuarios
+         WHERE correo = :correo
+         LIMIT 1'
     );
-    $stmt->execute([':email' => $email]);
+    $stmt->execute([':correo' => $correo]);
     $u = $stmt->fetch();
 
-    if (!$u || !$u['activo']) {
+    if (!$u) {
         return false;
     }
 
-    if (!password_verify($password, $u['password_hash'])) {
+    if ($u['estado'] !== null && (int) $u['estado'] === 0) {
         return false;
     }
 
-    $upd = db()->prepare('UPDATE usuarios SET ultimo_login = NOW() WHERE id = :id');
-    $upd->execute([':id' => $u['id']]);
+    $almacenada = (string) ($u['contrasena'] ?? '');
+    if ($almacenada === '') {
+        return false;
+    }
+
+    $descifrada = cripto_desencriptar($almacenada);
+    if (!hash_equals($descifrada, $password)) {
+        return false;
+    }
 
     $_SESSION['usuario'] = [
         'id'     => (int) $u['id'],
         'nombre' => $u['nombre'],
-        'email'  => $u['email'],
-        'rol'    => $u['rol'],
+        'correo' => $u['correo'],
+        'roles'  => (string) ($u['roles'] ?? ''),
     ];
 
     return true;

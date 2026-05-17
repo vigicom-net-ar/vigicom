@@ -30,10 +30,10 @@ cloud/
 │   ├── css/app.css       estilos
 │   └── js/               (vacio por ahora)
 ├── pages/                paginas internas (clientes, dispositivos, etc.)
-├── api/                  endpoints JSON (vacio)
-└── sql/
-    └── schema.sql        esquema + datos demo
+└── api/                  endpoints JSON (vacio)
 ```
+
+El esquema de base de datos vive a nivel repo en [../db/schema.sql](../db/schema.sql) porque es compartido por cloud, app y firmware. `install.php` lo lee desde ahi.
 
 ## Setup en local (XAMPP / WAMP)
 

@@ -1,83 +1,118 @@
 <?php
-require_once __DIR__ . '/includes/auth.php';
+/**
+ * Página de login (HTML).
+ *
+ * Es la única pantalla "tradicional" del lado server fuera del SPA shell.
+ * Se mantiene como página separada porque requireAuth() redirige acá cuando
+ * no hay JWT y el request pide HTML (ver lib/auth_check.php).
+ *
+ * El submit hace POST a /api/login.php por fetch; si responde ok, recarga / .
+ */
 
-if (usuario_actual()) {
-    header('Location: /dashboard.php');
+require_once __DIR__ . '/api/bootstrap.php';
+
+// Si ya hay sesión válida, ir directo al SPA.
+if (authUser() !== null) {
+    header('Location: /');
     exit;
 }
 
-$error = null;
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (!csrf_validar($_POST['csrf'] ?? null)) {
-        $error = 'Token de seguridad invalido. Refresca e intenta de nuevo.';
-    } else {
-        $email = trim((string) ($_POST['email'] ?? ''));
-        $pass  = (string) ($_POST['password'] ?? '');
-
-        if ($email === '' || $pass === '') {
-            $error = 'Ingresa email y contrasena.';
-        } elseif (intentar_login($email, $pass)) {
-            header('Location: /dashboard.php');
-            exit;
-        } else {
-            $error = 'Credenciales invalidas.';
-        }
-    }
-}
-
-$token = csrf_token();
+$version = is_readable(__DIR__ . '/version.txt')
+    ? trim((string) file_get_contents(__DIR__ . '/version.txt'))
+    : '0.0.dev';
+$cssBust = $version === '0.0.dev' ? (string) time() : $version;
 ?>
 <!doctype html>
 <html lang="es">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Ingresar &middot; <?php echo e(APP_NAME); ?></title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/assets/css/app.css">
+    <title>Ingresar &middot; Vigicom Cloud</title>
+    <link rel="stylesheet" href="/assets/css/style.css?v=<?php echo e($cssBust); ?>">
 </head>
 <body>
 <div class="login-shell">
     <div class="login-card">
-        <div class="flex items-center gap-3" style="margin-bottom: 1.25rem;">
-            <div class="sidebar__brand-logo">V</div>
+        <div class="login-brand">
+            <img src="/assets/img/reactor_white.png" alt="Vigicom">
             <div>
-                <div style="font-weight:700;">Vigicom <span style="color: hsl(var(--primary));">Cloud</span></div>
-                <div class="text-muted text-sm">Panel de administracion</div>
+                <div class="login-brand-title">Vigicom Cloud</div>
+                <div class="login-brand-sub">Panel de administración</div>
             </div>
         </div>
 
-        <h1>Iniciar sesion</h1>
-        <p>Ingresa con tu cuenta corporativa.</p>
+        <h1>Iniciar sesión</h1>
+        <p class="lead">Ingresá con tu cuenta corporativa.</p>
 
-        <?php if ($error): ?>
-            <div class="alert alert--error"><?php echo e($error); ?></div>
-        <?php endif; ?>
+        <div class="alert alert-error" id="loginError" style="display:none;"></div>
 
-        <form method="post" action="/login.php" autocomplete="on" novalidate>
-            <input type="hidden" name="csrf" value="<?php echo e($token); ?>">
-
-            <div class="form-group" style="margin-bottom: 0.875rem;">
+        <form id="loginForm" autocomplete="on" novalidate>
+            <div class="form-group" style="margin-bottom: 14px;">
                 <label for="email">Email</label>
-                <input class="input" type="email" id="email" name="email" required autofocus
-                       value="<?php echo e($_POST['email'] ?? ''); ?>">
+                <input type="email" id="email" name="email" required autofocus>
             </div>
 
-            <div class="form-group" style="margin-bottom: 1.25rem;">
-                <label for="password">Contrasena</label>
-                <input class="input" type="password" id="password" name="password" required>
+            <div class="form-group" style="margin-bottom: 20px;">
+                <label for="password">Contraseña</label>
+                <input type="password" id="password" name="password" required>
             </div>
 
-            <button class="btn btn--primary" type="submit">Ingresar</button>
+            <button class="btn btn-primary" type="submit" id="loginBtn">Ingresar</button>
         </form>
 
-        <div class="text-muted text-sm" style="margin-top: 1.25rem; text-align:center;">
+        <div class="login-foot">
             &copy; <?php echo date('Y'); ?> Vigicom &middot; cloud.vigicom.net.ar
         </div>
     </div>
 </div>
+
+<script>
+(function () {
+    var form = document.getElementById('loginForm');
+    var err  = document.getElementById('loginError');
+    var btn  = document.getElementById('loginBtn');
+
+    function showError(msg) {
+        err.textContent = msg;
+        err.style.display = 'block';
+    }
+    function hideError() {
+        err.style.display = 'none';
+    }
+
+    form.addEventListener('submit', async function (e) {
+        e.preventDefault();
+        hideError();
+        btn.disabled = true;
+        btn.textContent = 'Ingresando…';
+
+        var payload = {
+            email:    document.getElementById('email').value.trim(),
+            password: document.getElementById('password').value
+        };
+
+        try {
+            var res = await fetch('/api/login.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                body: JSON.stringify(payload),
+                credentials: 'same-origin'
+            });
+            var body = await res.json().catch(function () { return { ok: false, error: 'Respuesta inválida.' }; });
+            if (!res.ok || !body.ok) {
+                showError(body.error || 'No se pudo iniciar sesión.');
+                btn.disabled = false;
+                btn.textContent = 'Ingresar';
+                return;
+            }
+            window.location.href = '/';
+        } catch (e) {
+            showError('Error de red. Reintentá.');
+            btn.disabled = false;
+            btn.textContent = 'Ingresar';
+        }
+    });
+})();
+</script>
 </body>
 </html>

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(docker compose up -d --force-recreate cloud)",
+      "PowerShell(docker exec vigicom-cloud ls /var/www/api/config /var/www/db /var/www/.env.development)"
+    ]
+  }
+}

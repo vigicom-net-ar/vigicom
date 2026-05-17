@@ -2,20 +2,20 @@
 /**
  * Instalador / setup inicial.
  *
- * Ejecuta el esquema (sql/schema.sql) y crea el usuario admin con un hash real.
+ * Ejecuta el esquema (../db/schema.sql, compartido por todo el repo) y crea el
+ * usuario admin con contrasena cifrada por el metodo custom (cripto_encriptar).
  * Despues de usar, BORRAR este archivo o restringir su acceso.
  */
 
 require_once __DIR__ . '/config/database.php';
+require_once __DIR__ . '/includes/auth.php';
 
 $pasos = [];
 
 try {
     $pdo = db();
 
-    // 1. Ejecutar schema.sql
-    $sql = file_get_contents(__DIR__ . '/sql/schema.sql');
-    // Quitamos el CREATE DATABASE / USE -- asumimos que ya estamos conectados a la BD correcta
+    $sql = file_get_contents(dirname(__DIR__) . '/db/schema.sql');
     $sql = preg_replace('/CREATE DATABASE[^;]+;/i', '', $sql);
     $sql = preg_replace('/USE[^;]+;/i', '', $sql);
 
@@ -25,39 +25,84 @@ try {
     }
     $pasos[] = 'Esquema aplicado.';
 
-    // 2. Crear / actualizar admin con hash real
-    $email = 'admin@vigicom.net.ar';
-    $pass  = 'admin123'; // CAMBIAR despues del primer login
-    $hash  = password_hash($pass, PASSWORD_BCRYPT);
+    $correo = 'admin@vigicom.net.ar';
+    $pass   = 'admin123';
+    $cifr   = cripto_encriptar($pass);
 
-    $up = $pdo->prepare(
-        "INSERT INTO usuarios (nombre, email, password_hash, rol)
-         VALUES ('Administrador', :email, :hash, 'admin')
-         ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash), activo = 1"
-    );
-    $up->execute([':email' => $email, ':hash' => $hash]);
-    $pasos[] = "Admin listo: {$email} / {$pass}";
+    $existe = $pdo->prepare('SELECT id FROM usuarios WHERE correo = :correo LIMIT 1');
+    $existe->execute([':correo' => $correo]);
+    $id = $existe->fetchColumn();
+
+    if ($id) {
+        $up = $pdo->prepare(
+            'UPDATE usuarios
+                SET contrasena = :contrasena, estado = 1, roles = :roles, nombre = :nombre
+              WHERE id = :id'
+        );
+        $up->execute([
+            ':contrasena' => $cifr,
+            ':roles'      => 'admin',
+            ':nombre'     => 'Administrador',
+            ':id'         => $id,
+        ]);
+    } else {
+        $up = $pdo->prepare(
+            'INSERT INTO usuarios (nombre, correo, contrasena, roles, estado, registrado)
+             VALUES (:nombre, :correo, :contrasena, :roles, 1, NOW())'
+        );
+        $up->execute([
+            ':nombre'     => 'Administrador',
+            ':correo'     => $correo,
+            ':contrasena' => $cifr,
+            ':roles'      => 'admin',
+        ]);
+    }
+    $pasos[] = "Admin listo: {$correo} / {$pass}";
 
 } catch (Throwable $e) {
     http_response_code(500);
-    echo '<pre style="font-family:monospace;color:#b00020;">Error: ' . htmlspecialchars($e->getMessage()) . '</pre>';
+    $err = htmlspecialchars($e->getMessage());
+    ?>
+    <!doctype html><html lang="es"><head><meta charset="utf-8">
+    <title>Error de instalación &middot; Vigicom Cloud</title>
+    <link rel="stylesheet" href="/assets/css/app.css"></head>
+    <body><div class="login-shell"><div class="login-card">
+        <h1>Error de instalación</h1>
+        <div class="alert alert-error" style="white-space:pre-wrap; font-family:monospace; font-size:.78rem;"><?php echo $err; ?></div>
+        <a class="btn btn-secondary" href="/install.php">Reintentar</a>
+    </div></div></body></html>
+    <?php
     exit;
 }
 ?>
 <!doctype html>
-<html lang="es"><head><meta charset="utf-8"><title>Instalacion - Vigicom Cloud</title>
-<link rel="stylesheet" href="/assets/css/app.css"></head>
-<body style="padding:2rem; max-width:640px; margin:0 auto;">
-    <div class="card" style="padding: 1.5rem;">
-        <h1 style="margin-top:0;">Instalacion completada</h1>
-        <ul>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Instalación &middot; Vigicom Cloud</title>
+    <link rel="stylesheet" href="/assets/css/app.css">
+</head>
+<body>
+<div class="login-shell">
+    <div class="login-card">
+        <h1>Instalación completada</h1>
+        <p class="lead">Los siguientes pasos se ejecutaron correctamente.</p>
+
+        <dl class="data-list" style="margin-bottom: 16px;">
             <?php foreach ($pasos as $p): ?>
-                <li><?php echo htmlspecialchars($p); ?></li>
+                <div class="data-row">
+                    <dd class="data-value"><?php echo htmlspecialchars($p); ?></dd>
+                </div>
             <?php endforeach; ?>
-        </ul>
-        <div class="alert alert--error" style="background:hsl(38 92% 94%); color:hsl(38 80% 32%); border-color:hsl(38 80% 80%);">
-            <strong>IMPORTANTE:</strong> borra <code>install.php</code> del servidor y cambia la contrasena del admin.
+        </dl>
+
+        <div class="alert alert-warn">
+            <strong>Importante:</strong> borrá <code>install.php</code> del servidor y cambiá la contraseña del admin después del primer login.
         </div>
-        <a class="btn btn--primary" href="/login.php">Ir al login</a>
+
+        <a class="btn btn-primary" href="/login.php" style="width:100%; justify-content:center; padding:10px 16px;">Ir al login</a>
     </div>
-</body></html>
+</div>
+</body>
+</html>

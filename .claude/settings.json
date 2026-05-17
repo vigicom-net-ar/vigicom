@@ -6,10 +6,23 @@
       "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" http://localhost:8090/)",
       "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" http://localhost:8090/install.php)",
       "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" http://localhost:8090/config/config.php)",
-      "Read(//c/Users/Javier/Documents/Repositorios/vigicom_multirepo/vigicom-api/framework/**)"
+      "Read(//c/Users/Javier/Documents/Repositorios/vigicom_multirepo/vigicom-api/framework/**)",
+      "Bash(mkdir -p db)",
+      "Bash(mv -f schema.sql db/schema.sql)",
+      "Bash(rm cloud/sql/schema.sql)",
+      "Bash(rmdir cloud/sql)",
+      "Bash(ls \"C:\\\\Users\\\\Javier\\\\.claude\\\\projects\\\\c--Users-Javier-Documents-Repositorios-vigicom\\\\memory\\\\\")",
+      "Read(//c/Users/Javier/.claude/projects/c--Users-Javier-Documents-Repositorios-vigicom/**)",
+      "Bash(grep -rn '$user\\\\['\\\\''rol'\\\\''\\\\]\\\\|$user\\\\['\\\\''email'\\\\''\\\\]' c:/Users/Javier/Documents/Repositorios/vigicom/cloud/)",
+      "Bash(ls \"C:\\\\Users\\\\Javier\\\\Downloads\\\\reactor_withe.png\")",
+      "Read(//c/Users/Javier/Downloads/**)",
+      "Bash(mkdir -p \"c:/Users/Javier/Documents/Repositorios/vigicom/cloud/assets/img\")",
+      "Bash(cp \"C:/Users/Javier/Downloads/reactor_withe.png\" \"c:/Users/Javier/Documents/Repositorios/vigicom/cloud/assets/img/reactor_white.png\")",
+      "Bash(dir /s /b design.md stack.md 2>nul)"
     ],
     "additionalDirectories": [
-      "C:\\Users\\Javier\\Documents\\Repositorios\\vigicom\\cloud"
+      "C:\\Users\\Javier\\Documents\\Repositorios\\vigicom\\cloud",
+      "c:\\Users\\Javier\\Documents\\Repositorios\\vigicom"
     ]
   }
 }
