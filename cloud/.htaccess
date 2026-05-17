@@ -1,0 +1,34 @@
+# Vigicom Cloud - Apache rewrite + seguridad basica
+
+RewriteEngine On
+
+# Forzar HTTPS en produccion (descomentar al desplegar)
+# RewriteCond %{HTTPS} off
+# RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+# DirectoryIndex
+DirectoryIndex index.php
+
+# Bloquear acceso directo a carpetas sensibles
+# (DirectoryMatch no se permite en .htaccess - usamos RewriteRule)
+RewriteRule ^(config|includes|sql)(/|$) - [F,L]
+
+# Bloquear archivos sensibles
+<FilesMatch "(^\.|\.sql$|\.md$|composer\.(json|lock)|\.env)">
+    Require all denied
+</FilesMatch>
+
+# Headers de seguridad
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-Frame-Options "SAMEORIGIN"
+    Header set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>
+
+# Cache estaticos
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType text/css "access plus 7 days"
+    ExpiresByType application/javascript "access plus 7 days"
+    ExpiresByType image/svg+xml "access plus 30 days"
+</IfModule>

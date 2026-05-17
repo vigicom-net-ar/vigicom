@@ -1,0 +1,62 @@
+# Vigicom - stack local de desarrollo
+# Cada app PHP es un servicio separado (mismo Dockerfile, distinto bind y puerto).
+# Para agregar una nueva app, copiar el bloque "cloud" cambiando puerto + volume.
+
+name: vigicom
+
+services:
+  db:
+    image: mysql:8.0
+    container_name: vigicom-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: vigicom-dev
+    ports:
+      - "3310:3306"
+    volumes:
+      - vigicom_dbdata:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot", "--silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  cloud:
+    build:
+      context: ./docker/php
+    container_name: vigicom-cloud
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8090:80"
+    volumes:
+      - ./cloud:/var/www/html
+    environment:
+      APP_ENV: dev
+      APP_URL: http://localhost:8090
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_NAME: vigicom-dev
+      DB_USER: root
+      DB_PASS: root
+
+  phpmyadmin:
+    image: phpmyadmin:5
+    container_name: vigicom-pma
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8091:80"
+    environment:
+      PMA_HOST: db
+      PMA_USER: root
+      PMA_PASSWORD: root
+      UPLOAD_LIMIT: 64M
+
+volumes:
+  vigicom_dbdata:
