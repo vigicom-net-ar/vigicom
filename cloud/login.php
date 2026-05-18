@@ -28,7 +28,7 @@ $cssBust = $version === '0.0.dev' ? (string) time() : $version;
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Ingresar &middot; Vigicom Cloud</title>
-    <link rel="stylesheet" href="/assets/css/style.css?v=<?php echo e($cssBust); ?>">
+    <link rel="stylesheet" href="/assets/css/app.css?v=<?php echo e($cssBust); ?>">
 </head>
 <body>
 <div class="login-shell">

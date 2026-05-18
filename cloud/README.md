@@ -1,64 +1,78 @@
 # Vigicom Cloud
 
-Panel de administracion principal de Vigicom. Servido desde `cloud.vigicom.net.ar`.
+Panel de administración principal de Vigicom. Servido desde `cloud.vigicom.net.ar`.
 
-## Stack
+Para detalles de stack y arquitectura ver [STACK.md](STACK.md); para el sistema de diseño visual ver [DESIGN.md](DESIGN.md).
 
-- PHP 8.1+ (server-rendered)
-- MySQL 5.7+ / MariaDB
-- HTML + CSS propio inspirado en shadcn/ui (tema morado)
-- Sin build step / sin dependencias npm
+## Stack (resumen)
+
+- PHP 8.2 sin Composer (archivos sueltos, `require_once` explícito).
+- MySQL 8.0 / MariaDB.
+- HTML + CSS + JS vanilla. Un único `assets/css/app.css` y un único `assets/js/app.js`.
+- Sin build step, sin npm, sin frameworks.
+- Auth: JWT HS256 firmado con `APP_KEY`, cookie `vigicom_token` (HttpOnly).
 
 ## Estructura
 
 ```
 cloud/
-├── index.php             redirige a login o dashboard
-├── login.php             autenticacion
-├── logout.php
-├── dashboard.php         dashboard principal (KPIs + actividad)
-├── install.php           setup inicial - BORRAR despues de instalar
-├── .htaccess             rewrite + headers de seguridad
-├── config/
-│   ├── config.php        constantes (env, DB, sesiones)
-│   └── database.php      conexion PDO singleton
-├── includes/
-│   ├── auth.php          login, sesiones, CSRF, helper e()
-│   ├── layout_top.php    sidebar + topbar
-│   └── layout_bottom.php cierre
-├── assets/
-│   ├── css/app.css       estilos
-│   └── js/               (vacio por ahora)
-├── pages/                paginas internas (clientes, dispositivos, etc.)
-└── api/                  endpoints JSON (vacio)
+├── index.php             shell SPA (layout + #view + carga app.js)
+├── login.php             pantalla de login (única vista server-rendered, fuera del SPA)
+├── logout.php            limpia cookie JWT y vuelve a login
+├── install.php           setup inicial — BORRAR después de instalar
+├── version.txt           se genera en cada deploy
+├── api/
+│   ├── bootstrap.php     arranque común (secrets + db + auth_check)
+│   ├── config/db.php     conexión PDO + getConfigValue()
+│   ├── login.php         POST: emite JWT
+│   ├── logout.php        POST: limpia JWT
+│   ├── me.php            GET: usuario autenticado
+│   ├── version.php       GET: versión del deploy
+│   ├── dashboard.php     GET: KPIs + alarmas + disparos
+│   └── usuarios.php      REST CRUD admin-only
+├── lib/
+│   ├── auth_check.php    requireAuth() + json_ok()/json_error()
+│   ├── jwt.php           HS256 sign/verify minimalista
+│   └── crypto.php        cifrado legacy de contraseñas (compatibilidad)
+└── assets/
+    ├── css/app.css       todos los estilos (ver DESIGN.md)
+    ├── js/app.js         router SPA + vistas
+    └── img/
 ```
 
-El esquema de base de datos vive a nivel repo en [../db/schema.sql](../db/schema.sql) porque es compartido por cloud, app y firmware. `install.php` lo lee desde ahi.
+El esquema de base de datos vive a nivel repo en [../db/schema.sql](../db/schema.sql) porque es compartido por cloud, app y firmware. `install.php` lo lee desde ahí.
 
-## Setup en local (XAMPP / WAMP)
+## SPA + endpoints
 
-1. Crea la base de datos (el guion obliga a entrecomillar con backticks):
+`index.php` es el shell: renderiza una sola vez el layout y delega el contenido de `#view` a `assets/js/app.js`. La navegación es por hash (`#/dashboard`, `#/usuarios`, ...) y cada ruta dispara un `fetch('/api/<recurso>.php')` que devuelve JSON con la forma `{ok: true, data: …}` / `{ok: false, error: '…'}`.
+
+Las URLs server-side son tres y nada más:
+
+| Ruta              | Para qué                                                       |
+|-------------------|----------------------------------------------------------------|
+| `/`               | Shell SPA. Cualquier ruta interna vive en el `location.hash`.  |
+| `/login.php`      | Página de login (a la que `requireAuth()` redirige sin JWT).   |
+| `/logout.php`     | Limpia la cookie y vuelve al login.                            |
+
+Todo lo demás pasa por `/api/*.php`.
+
+## Setup en local
+
+1. Crear la base (el guion exige backticks):
    ```sql
    CREATE DATABASE `vigicom-dev` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
    ```
-2. Apunta el DocumentRoot del vhost a la carpeta `cloud/` (no a la raiz del repo).
-3. Ajusta credenciales de MySQL en `config/config.php` (o variables de entorno `DB_HOST`, `DB_USER`, `DB_PASS`, `DB_NAME`).
-4. Abre `http://cloud.local/install.php` para crear las tablas + el admin.
-5. **Borra `install.php`**.
-6. Ingresa con:
+2. Variables de entorno en `.env.development` (en la raíz del repo): `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASS`, `APP_KEY`.
+3. Levantar el contenedor Docker (puerto 8086) o apuntar un vhost local al directorio `cloud/`.
+4. Abrir `http://localhost:8086/install.php` para aplicar el esquema y crear el admin inicial.
+5. **Borrar `install.php`.**
+6. Login:
    - email: `admin@vigicom.net.ar`
    - pass:  `admin123` (cambiala desde el primer login)
 
-## Despliegue en `cloud.vigicom.net.ar`
-
-- Subir solo el contenido de `cloud/` al DocumentRoot del subdominio.
-- Crear DB, ejecutar `install.php` una vez, borrarlo.
-- En `config/config.php` (o variables de entorno del hosting) definir `APP_ENV=prod`.
-- Descomentar el bloque de forzado HTTPS en `.htaccess`.
-
 ## Convenciones
 
-- Todo output de variables va por `e()` (htmlspecialchars).
-- Toda query parametrizada con PDO.
-- Sesion configurada con `httponly`, `samesite=Lax`, `secure` en prod.
-- CSRF token en todos los forms.
+- Todo endpoint protegido empieza con `requireAuth()` (ver `lib/auth_check.php`).
+- Todas las queries van parametrizadas con PDO.
+- Salida de cualquier endpoint: `json_ok($data)` o `json_error($msg, $status)`.
+- En el SPA, el `fetch` siempre va con `credentials: 'same-origin'` para que la cookie JWT viaje. Si la respuesta es 401, `app.js` redirige a `/login.php`.

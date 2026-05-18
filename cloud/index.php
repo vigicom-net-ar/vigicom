@@ -21,7 +21,7 @@ $cssBust = $version === '0.0.dev' ? (string) time() : $version;
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Vigicom Cloud</title>
-    <link rel="stylesheet" href="/assets/css/style.css?v=<?php echo e($cssBust); ?>">
+    <link rel="stylesheet" href="/assets/css/app.css?v=<?php echo e($cssBust); ?>">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 </head>
 <body>
@@ -39,6 +39,23 @@ $cssBust = $version === '0.0.dev' ? (string) time() : $version;
             <a class="nav-item" href="#/clientes"     data-route="/clientes">
                 <span class="nav-icon">👥</span><span>Clientes</span>
             </a>
+
+            <div class="nav-group-wrap" data-group="inventario">
+                <button type="button" class="nav-item nav-group-toggle">
+                    <span class="nav-icon">📦</span>
+                    <span class="nav-group-label">Inventario</span>
+                    <span class="nav-group-arrow">+</span>
+                </button>
+                <div class="nav-sub">
+                    <a class="nav-item nav-sub-item" href="#/comunidades" data-route="/comunidades">
+                        <span class="nav-icon">🏘️</span><span>Comunidad</span>
+                    </a>
+                    <a class="nav-item nav-sub-item" href="#/casas" data-route="/casas">
+                        <span class="nav-icon">🏠</span><span>Casas</span>
+                    </a>
+                </div>
+            </div>
+
             <a class="nav-item" href="#/dispositivos" data-route="/dispositivos">
                 <span class="nav-icon">🛰️</span><span>Dispositivos</span>
             </a>
@@ -48,12 +65,25 @@ $cssBust = $version === '0.0.dev' ? (string) time() : $version;
             <a class="nav-item" href="#/reportes"     data-route="/reportes">
                 <span class="nav-icon">📋</span><span>Reportes</span>
             </a>
-            <a class="nav-item" href="#/usuarios"     data-route="/usuarios">
-                <span class="nav-icon">👤</span><span>Usuarios</span>
-            </a>
             <a class="nav-item" href="#/config"       data-route="/config">
                 <span class="nav-icon">⚙️</span><span>Configuración</span>
             </a>
+
+            <div class="nav-group-wrap" data-group="seguridad">
+                <button type="button" class="nav-item nav-group-toggle">
+                    <span class="nav-icon">🔒</span>
+                    <span class="nav-group-label">Seguridad</span>
+                    <span class="nav-group-arrow">+</span>
+                </button>
+                <div class="nav-sub">
+                    <a class="nav-item nav-sub-item" href="#/usuarios" data-route="/usuarios">
+                        <span class="nav-icon">👤</span><span>Usuarios</span>
+                    </a>
+                    <a class="nav-item nav-sub-item" href="#/roles" data-route="/roles">
+                        <span class="nav-icon">🛡️</span><span>Roles</span>
+                    </a>
+                </div>
+            </div>
         </nav>
 
         <div class="sidebar-footer">v<?php echo e($version); ?> &middot; Vigicom Cloud</div>
