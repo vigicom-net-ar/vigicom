@@ -357,7 +357,7 @@ tbody tr:hover { background: var(--row-hover); }
 .data-list  { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
               gap: 12px; }
 .data-row   { background: color-mix(in srgb, var(--surface) 90%, #000);
-              border: 1px solid var(--border);
+              border: none;
               border-radius: 10px; padding: 12px 14px;
               display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .data-row.data-row-full { grid-column: 1 / -1; }

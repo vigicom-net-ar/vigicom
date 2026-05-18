@@ -176,22 +176,37 @@ function rol_get(PDO $pdo, int $id): array
 function roles_listar(PDO $pdo, array $opts = []): array
 {
     $sortCols = [
-        'id'      => 'id',
-        'nombre'  => 'nombre',
-        'sistema' => 'sistema',
+        'id'          => 'id',
+        'nombre'      => 'nombre',
+        'descripcion' => 'descripcion',
+        'sistema'     => 'sistema',
     ];
     $sortKey = (string) ($opts['sort'] ?? 'id');
     if (!isset($sortCols[$sortKey])) {
         $sortKey = 'id';
     }
-    $dir = strtolower((string) ($opts['dir'] ?? 'asc')) === 'desc' ? 'DESC' : 'ASC';
+    $dir = strtolower((string) ($opts['dir'] ?? 'desc')) === 'asc' ? 'ASC' : 'DESC';
 
-    $limit = isset($opts['limit']) && ctype_digit((string) $opts['limit']) ? (int) $opts['limit'] : 200;
-    if ($limit < 1)    { $limit = 200; }
+    $limit = isset($opts['limit']) && ctype_digit((string) $opts['limit']) ? (int) $opts['limit'] : 100;
+    if ($limit < 1)    { $limit = 100; }
     if ($limit > 1000) { $limit = 1000; }
 
     $where  = [];
     $params = [];
+    if (isset($opts['filtro_id']) && ctype_digit((string) $opts['filtro_id']) && (int) $opts['filtro_id'] > 0) {
+        $where[] = 'id = :filtro_id';
+        $params[':filtro_id'] = (int) $opts['filtro_id'];
+    }
+    $nombre = trim((string) ($opts['nombre'] ?? ''));
+    if ($nombre !== '') {
+        $where[] = 'nombre LIKE :nombre';
+        $params[':nombre'] = '%' . $nombre . '%';
+    }
+    $descripcion = trim((string) ($opts['descripcion'] ?? ''));
+    if ($descripcion !== '') {
+        $where[] = 'descripcion LIKE :descripcion';
+        $params[':descripcion'] = '%' . $descripcion . '%';
+    }
     $sistema = (string) ($opts['sistema'] ?? '');
     if ($sistema === '1') {
         $where[] = "sistema = '1'";

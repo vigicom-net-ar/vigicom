@@ -51,6 +51,7 @@ El formulario de búsqueda debe respetar este orden de campos:
 - Los campos se muestran en modo lectura.
 - Cada campo se renderiza en una **tarjeta individual** (`div`) con:
   - **Esquinas redondeadas**.
+  - **Sin bordes** (`border: none`). Las tarjetas se diferencian del fondo del modal únicamente por el color de fondo, no por un borde.
   - **Color de fondo exactamente un 10% más oscuro** que el color de fondo del modal. Implementación recomendada en CSS: `background: color-mix(in srgb, var(--surface) 90%, #000);`. Este valor es **obligatorio** y no debe variarse por módulo.
   - Etiqueta del campo y valor dentro de la misma tarjeta.
 - **Ancho de las tarjetas**:

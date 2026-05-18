@@ -146,11 +146,12 @@
     // Compartidos entre todos los modulos ABM (usuarios, comunidades, casas,
     // alarmas, equipos).
 
-    function abmRow(label, value, muted) {
-        var cls = 'data-value' + (muted ? ' muted' : '');
-        return '<div class="data-row">' +
+    function abmRow(label, value, muted, full) {
+        var rowCls = 'data-row' + (full ? ' data-row-full' : '');
+        var valCls = 'data-value' + (muted ? ' muted' : '');
+        return '<div class="' + rowCls + '">' +
             '<dt class="data-label">' + e(label) + '</dt>' +
-            '<dd class="' + cls + '">' + value + '</dd>' +
+            '<dd class="' + valCls + '">' + value + '</dd>' +
         '</div>';
     }
     function abmFecha(v) {
@@ -162,22 +163,22 @@
         var s = String(v).toUpperCase();
         return (s === '1' || s === 'S' || s === 'SI' || s === 'SÍ' || s === 'Y' || s === 'TRUE') ? 'Sí' : 'No';
     }
-    function abmRowTxt(label, v, vacio) {
+    function abmRowTxt(label, v, vacio, full) {
         var muted = v == null || v === '';
-        return abmRow(label, e(muted ? (vacio || '—') : v), muted);
+        return abmRow(label, e(muted ? (vacio || '—') : v), muted, full);
     }
-    function abmRowRef(label, id, nombre, vacio) {
-        if (id == null || id === '') return abmRow(label, e(vacio || '—'), true);
+    function abmRowRef(label, id, nombre, vacio, full) {
+        if (id == null || id === '') return abmRow(label, e(vacio || '—'), true, full);
         var txt = nombre ? (nombre + ' (#' + id + ')') : ('#' + id);
-        return abmRow(label, e(txt));
+        return abmRow(label, e(txt), false, full);
     }
-    function abmRowSiNo(label, v) {
+    function abmRowSiNo(label, v, full) {
         var t = abmSiNo(v);
-        return abmRow(label, e(t || 'No definido'), t == null);
+        return abmRow(label, e(t || 'No definido'), t == null, full);
     }
-    function abmRowNum(label, v, vacio) {
+    function abmRowNum(label, v, vacio, full) {
         var muted = v == null || v === '';
-        return abmRow(label, e(muted ? (vacio || '—') : String(v)), muted);
+        return abmRow(label, e(muted ? (vacio || '—') : String(v)), muted, full);
     }
 
     // -------- Vista: placeholder ------------------------------------------
@@ -917,10 +918,39 @@
 
     // -------- Vista: Roles ------------------------------------------------
 
+    var rolesFiltros = {
+        sort:        'id',
+        dir:         'desc',
+        limit:       100,
+        filtro_id:   '',
+        nombre:      '',
+        descripcion: '',
+        sistema:     ''
+    };
+
+    function rolesQueryString() {
+        var qs = [];
+        Object.keys(rolesFiltros).forEach(function (k) {
+            var v = rolesFiltros[k];
+            if (v !== '' && v != null) {
+                qs.push(encodeURIComponent(k) + '=' + encodeURIComponent(v));
+            }
+        });
+        return qs.length ? ('?' + qs.join('&')) : '';
+    }
+
     async function renderRoles(view) {
-        var data  = await api('/api/roles.php');
+        var data  = await api('/api/roles.php' + rolesQueryString());
         var roles = data.roles || [];
         var kpis  = data.kpis  || {};
+
+        var filtrosActivos = (rolesFiltros.filtro_id   !== '' ? 1 : 0) +
+                             (rolesFiltros.nombre      !== '' ? 1 : 0) +
+                             (rolesFiltros.descripcion !== '' ? 1 : 0) +
+                             (rolesFiltros.sistema     !== '' ? 1 : 0);
+        var badgeFiltros = filtrosActivos
+            ? ' <span class="badge badge-info" style="margin-left:6px;">' + filtrosActivos + '</span>'
+            : '';
 
         view.innerHTML =
             '<div class="page-header"><div>' +
@@ -936,10 +966,9 @@
 
             '<div class="toolbar">' +
                 '<div class="toolbar-left">' +
-                    '<div class="search-wrap">' +
-                        '<input type="search" id="rolSearch" class="search-input" placeholder="Buscar nombre o descripción...">' +
-                        '<button class="search-clear" id="rolSearchClear" type="button" style="display:none;">&times;</button>' +
-                    '</div>' +
+                    '<button class="btn btn-secondary" id="rolFiltros" type="button">' +
+                        '<i class="fa-solid fa-filter"></i> Filtros' + badgeFiltros +
+                    '</button>' +
                 '</div>' +
                 '<div class="toolbar-right">' +
                     '<button class="btn btn-primary" id="rolNuevo" type="button">+ Nuevo rol</button>' +
@@ -948,18 +977,19 @@
 
             '<div class="table-card">' +
                 '<table><thead><tr>' +
-                    '<th>Rol</th><th>Descripción</th><th>Tipo</th>' +
+                    '<th>Código</th><th>Nombre</th><th>Descripción</th><th>Tipo</th>' +
                     '<th style="text-align:right;">Acciones</th>' +
                 '</tr></thead><tbody id="rolTbody">' +
                 renderFilasRoles(roles) +
                 '</tbody></table>' +
-                '<div class="table-empty" id="rolEmpty" style="display:none;">No hay roles que coincidan con la búsqueda.</div>' +
             '</div>' +
             '<div class="text-muted text-sm" style="margin-top:10px;">' +
-                'Mostrando ' + roles.length + ' resultado(s).' +
+                'Mostrando ' + roles.length + ' resultado(s) (límite ' + rolesFiltros.limit + ').' +
             '</div>' +
 
             modalRolHtml() +
+            modalFiltrosRolesHtml() +
+            modalConsultarRolHtml() +
             confirmDeleteRolHtml();
 
         wireRolesView();
@@ -967,16 +997,13 @@
 
     function renderFilasRoles(roles) {
         if (!roles.length) {
-            return '<tr><td colspan="4" class="table-empty">No hay roles cargados.</td></tr>';
+            return '<tr><td colspan="5" class="table-empty">No hay roles cargados.</td></tr>';
         }
         return roles.map(function (r) {
             var esSistema = String(r.sistema || '') === '1';
-            var busq      = String((r.nombre || '') + ' ' + (r.descripcion || '')).toLowerCase().trim();
-            return '<tr data-id="' + r.id + '" data-sistema="' + (esSistema ? 1 : 0) + '" data-search="' + e(busq) + '">' +
-                '<td>' +
-                    '<div class="td-nombre">' + e(r.nombre || '—') + '</div>' +
-                    '<div class="td-id">#' + r.id + '</div>' +
-                '</td>' +
+            return '<tr data-id="' + r.id + '" data-sistema="' + (esSistema ? 1 : 0) + '">' +
+                '<td class="td-id">#' + r.id + '</td>' +
+                '<td><div class="td-nombre">' + e(r.nombre || '—') + '</div></td>' +
                 '<td>' + e(r.descripcion || '—') + '</td>' +
                 '<td>' +
                     (esSistema
@@ -985,6 +1012,7 @@
                 '</td>' +
                 '<td>' +
                     '<div class="actions" style="justify-content:flex-end;">' +
+                        '<button class="btn-icon-sm" data-act="view"   type="button" title="Consultar"><i class="fa-solid fa-eye"></i></button>' +
                         '<button class="btn-icon-sm" data-act="edit"   type="button" title="Editar"><i class="fa-solid fa-pencil"></i></button>' +
                         '<button class="btn-icon-sm" data-act="delete" type="button" title="Eliminar"' +
                             (esSistema ? ' disabled style="opacity:.4;cursor:not-allowed;"' : '') +
@@ -1052,11 +1080,86 @@
         '</div></div>';
     }
 
+    function modalFiltrosRolesHtml() {
+        function selOpt(value, label, current) {
+            var sel = String(current) === String(value) ? ' selected' : '';
+            return '<option value="' + e(value) + '"' + sel + '>' + e(label) + '</option>';
+        }
+        return '<div class="modal-backdrop" id="rolFiltrosModal"><div class="modal">' +
+            '<div class="modal-header">' +
+                '<div class="modal-title"><span>Filtros</span></div>' +
+                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+            '</div>' +
+            '<form id="rolFiltrosForm" novalidate>' +
+                '<div class="modal-body">' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="rflt-id">Código</label>' +
+                            '<input id="rflt-id" type="number" min="1" step="1" inputmode="numeric" ' +
+                                'placeholder="Código del registro" value="' + e(rolesFiltros.filtro_id) + '"></div>' +
+                        '<div class="form-group"><label for="rflt-nombre">Nombre</label>' +
+                            '<input id="rflt-nombre" type="text" maxlength="255" ' +
+                                'placeholder="Nombre del rol" value="' + e(rolesFiltros.nombre) + '"></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="rflt-descripcion">Descripción</label>' +
+                            '<input id="rflt-descripcion" type="text" maxlength="255" ' +
+                                'placeholder="Texto en descripción" value="' + e(rolesFiltros.descripcion) + '"></div>' +
+                        '<div class="form-group"><label for="rflt-sistema">Tipo</label>' +
+                            '<select id="rflt-sistema">' +
+                                selOpt('',  'Todos',          rolesFiltros.sistema) +
+                                selOpt('1', 'Sistema',        rolesFiltros.sistema) +
+                                selOpt('0', 'Personalizados', rolesFiltros.sistema) +
+                            '</select></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="rflt-sort">Ordenar por</label>' +
+                            '<select id="rflt-sort">' +
+                                selOpt('id',          'Código',      rolesFiltros.sort) +
+                                selOpt('nombre',      'Nombre',      rolesFiltros.sort) +
+                                selOpt('descripcion', 'Descripción', rolesFiltros.sort) +
+                                selOpt('sistema',     'Tipo',        rolesFiltros.sort) +
+                            '</select></div>' +
+                        '<div class="form-group"><label for="rflt-dir">Dirección</label>' +
+                            '<select id="rflt-dir">' +
+                                selOpt('desc', 'Descendente', rolesFiltros.dir) +
+                                selOpt('asc',  'Ascendente',  rolesFiltros.dir) +
+                            '</select></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="rflt-limit">Límite</label>' +
+                            '<input id="rflt-limit" type="number" min="1" max="1000" step="1" ' +
+                                'inputmode="numeric" value="' + e(rolesFiltros.limit) + '"></div>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="modal-footer">' +
+                    '<button type="button" class="btn btn-ghost"     id="rolFiltrosReset" >Limpiar</button>' +
+                    '<button type="button" class="btn btn-secondary" data-act="close"    >Cancelar</button>' +
+                    '<button type="submit"  class="btn btn-primary"                       >Aplicar</button>' +
+                '</div>' +
+            '</form>' +
+        '</div></div>';
+    }
+
+    function modalConsultarRolHtml() {
+        return '<div class="modal-backdrop" id="rolConsultar"><div class="modal">' +
+            '<div class="modal-header">' +
+                '<div class="modal-title">' +
+                    '<span>Consultar rol</span>' +
+                    '<span class="modal-subtitle" id="rolConsultarSub"></span>' +
+                '</div>' +
+                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+            '</div>' +
+            '<div class="modal-body">' +
+                '<dl class="data-list" id="rolConsultarBody"></dl>' +
+            '</div>' +
+            '<div class="modal-footer">' +
+                '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+            '</div>' +
+        '</div></div>';
+    }
+
     function wireRolesView() {
         var tbody       = document.getElementById('rolTbody');
-        var emptyState  = document.getElementById('rolEmpty');
-        var searchInput = document.getElementById('rolSearch');
-        var searchClear = document.getElementById('rolSearchClear');
 
         var modal        = document.getElementById('rolModal');
         var modalTitulo  = document.getElementById('rolModalTitulo');
@@ -1072,28 +1175,82 @@
         var confirmMsg = document.getElementById('rolConfirmMsg');
         var btnDelete  = document.getElementById('rolConfirmBtn');
 
+        var filtrosModal = document.getElementById('rolFiltrosModal');
+        var filtrosForm  = document.getElementById('rolFiltrosForm');
+
+        var consultarModal = document.getElementById('rolConsultar');
+        var consultarSub   = document.getElementById('rolConsultarSub');
+        var consultarBody  = document.getElementById('rolConsultarBody');
+
         var pendingDeleteId = null;
         var modoEdicion     = false;
 
-        function applyFilters() {
-            var q = searchInput.value.trim().toLowerCase();
-            var visibles = 0;
-            tbody.querySelectorAll('tr[data-id]').forEach(function (tr) {
-                var haystack = tr.dataset.search || '';
-                var show = !q || haystack.indexOf(q) !== -1;
-                tr.style.display = show ? '' : 'none';
-                if (show) visibles++;
-            });
-            emptyState.style.display = (visibles === 0 && tbody.querySelector('tr[data-id]')) ? '' : 'none';
-            searchClear.style.display = q ? '' : 'none';
-        }
-
-        searchInput.addEventListener('input', applyFilters);
-        searchClear.addEventListener('click', function () {
-            searchInput.value = '';
-            applyFilters();
-            searchInput.focus();
+        document.getElementById('rolFiltros').addEventListener('click', function () {
+            filtrosModal.classList.add('open');
         });
+        filtrosModal.addEventListener('click', function (ev) {
+            if (ev.target === filtrosModal || ev.target.closest('[data-act="close"]')) {
+                filtrosModal.classList.remove('open');
+            }
+        });
+        document.getElementById('rolFiltrosReset').addEventListener('click', function () {
+            rolesFiltros.sort        = 'id';
+            rolesFiltros.dir         = 'desc';
+            rolesFiltros.limit       = 100;
+            rolesFiltros.filtro_id   = '';
+            rolesFiltros.nombre      = '';
+            rolesFiltros.descripcion = '';
+            rolesFiltros.sistema     = '';
+            filtrosModal.classList.remove('open');
+            navigate();
+        });
+        filtrosForm.addEventListener('submit', function (ev) {
+            ev.preventDefault();
+            rolesFiltros.filtro_id   = document.getElementById('rflt-id').value.trim();
+            rolesFiltros.nombre      = document.getElementById('rflt-nombre').value.trim();
+            rolesFiltros.descripcion = document.getElementById('rflt-descripcion').value.trim();
+            rolesFiltros.sistema     = document.getElementById('rflt-sistema').value;
+            rolesFiltros.limit       = parseInt(document.getElementById('rflt-limit').value, 10) || 100;
+            rolesFiltros.sort        = document.getElementById('rflt-sort').value || 'id';
+            rolesFiltros.dir         = document.getElementById('rflt-dir').value  || 'desc';
+            filtrosModal.classList.remove('open');
+            navigate();
+        });
+
+        consultarModal.addEventListener('click', function (ev) {
+            if (ev.target === consultarModal || ev.target.closest('[data-act="close"]')) {
+                consultarModal.classList.remove('open');
+            }
+        });
+
+        async function abrirConsulta(id) {
+            consultarSub.innerHTML  = '<code>#' + id + '</code>';
+            consultarBody.innerHTML = '<div style="display:flex;justify-content:center;padding:24px"><div class="spin"></div></div>';
+            consultarModal.classList.add('open');
+
+            var r;
+            try {
+                r = await api('/api/roles.php?id=' + id);
+            } catch (err) {
+                consultarBody.innerHTML = '<div class="alert alert-error">' + e(err.message) + '</div>';
+                return;
+            }
+
+            var esSistema = String(r.sistema || '') === '1';
+            var tipoBadge = esSistema
+                ? '<span class="badge badge-danger">Sistema</span>'
+                : '<span class="badge badge-success">Personalizado</span>';
+
+            consultarSub.innerHTML  = '<code>#' + r.id + '</code>';
+            consultarBody.innerHTML =
+                abmRow    ('Código',      '<code>#' + r.id + '</code>') +
+                abmRow    ('Tipo',         tipoBadge) +
+                abmRowTxt ('Nombre',       r.nombre,      'Sin nombre',      true) +
+                abmRowTxt ('Descripción',  r.descripcion, 'Sin descripción', true) +
+                abmRowTxt ('Permisos',     r.permisos,    'Sin permisos',    true) +
+                abmRowTxt ('Menús',        r.menus,       'Sin menús',       true) +
+                abmRowTxt ('Widgets',      r.widgets,     'Sin widgets',     true);
+        }
 
         function setSistemaLabel() {
             sistemaLabel.textContent = fSistema.checked ? 'Sistema' : 'Personalizado';
@@ -1136,6 +1293,11 @@
             var tr = btn.closest('tr[data-id]');
             if (!tr) return;
             var id = parseInt(tr.dataset.id, 10);
+
+            if (btn.dataset.act === 'view') {
+                abrirConsulta(id);
+                return;
+            }
 
             if (btn.dataset.act === 'edit') {
                 try {
@@ -1231,8 +1393,6 @@
                 btnGuardar.disabled = false;
             }
         });
-
-        applyFilters();
     }
 
     // -------- Vista: Comunidades ------------------------------------------
