@@ -167,10 +167,28 @@ function comunidad_nombre_duplicado(PDO $pdo, string $nombre, int $excluir_id = 
 
 function comunidad_get(PDO $pdo, int $id): array
 {
+    // Devuelve todos los campos del registro, con nombres resueltos para la ciudad
+    // (referenciada como ID) y un conteo agregado de casas asociadas.
     $stmt = $pdo->prepare(
-        'SELECT id, nombre, domicilio, indicaciones, policia, ambulancia, bomberos, estado
-           FROM comunidades
-          WHERE id = :id
+        'SELECT c.id, c.uuid, c.nombre, c.domicilio, c.ciudad, c.latitud, c.longitud,
+                c.indicaciones, c.policia, c.ambulancia, c.bomberos,
+                c.solvencia, c.inscripcion, c.plan, c.promo, c.promoInicio, c.promoFin,
+                c.mantenimiento, c.convenio,
+                c.contratos, c.contratosVigentes, c.contratosMorosos,
+                c.contratosSuspendidos, c.contratosRescindidos, c.contratosPermanencia,
+                c.alarmas, c.alarmasOnline, c.alarmasOffline, c.alarmasFuncionamiento,
+                c.casas, c.usuarios, c.disparos,
+                c.registro, c.alta, c.modo, c.vendedor, c.estado,
+                c.wspHabilitado, c.wspNombre, c.wspDescripcion, c.wspGrupo,
+                c.wspInvitacion, c.wspIcono, c.wspMiembros,
+                c.wspActualizado, c.wspRenovado,
+                CONCAT_WS(", ", ci.localidad, ci.provincia) AS ciudad_nombre,
+                v.nombre AS vendedor_nombre,
+                (SELECT COUNT(*) FROM casas k WHERE k.comunidad = c.id) AS casas_count
+           FROM comunidades c
+           LEFT JOIN ciudades ci ON ci.id = c.ciudad
+           LEFT JOIN usuarios v  ON v.id  = c.vendedor
+          WHERE c.id = :id
           LIMIT 1'
     );
     $stmt->execute([':id' => $id]);
@@ -195,12 +213,21 @@ function comunidades_listar(PDO $pdo, array $opts = []): array
     }
     $dir = strtolower((string) ($opts['dir'] ?? 'desc')) === 'asc' ? 'ASC' : 'DESC';
 
-    $limit = isset($opts['limit']) && ctype_digit((string) $opts['limit']) ? (int) $opts['limit'] : 200;
-    if ($limit < 1)    { $limit = 200; }
+    $limit = isset($opts['limit']) && ctype_digit((string) $opts['limit']) ? (int) $opts['limit'] : 100;
+    if ($limit < 1)    { $limit = 100; }
     if ($limit > 1000) { $limit = 1000; }
 
     $where  = [];
     $params = [];
+    if (isset($opts['filtro_id']) && ctype_digit((string) $opts['filtro_id']) && (int) $opts['filtro_id'] > 0) {
+        $where[] = 'c.id = :filtro_id';
+        $params[':filtro_id'] = (int) $opts['filtro_id'];
+    }
+    $nombre = trim((string) ($opts['nombre'] ?? ''));
+    if ($nombre !== '') {
+        $where[] = 'c.nombre LIKE :nombre';
+        $params[':nombre'] = '%' . $nombre . '%';
+    }
     $estado = (string) ($opts['estado'] ?? '');
     if ($estado === '0' || $estado === '1') {
         $where[] = 'COALESCE(c.estado, 0) = :estado';

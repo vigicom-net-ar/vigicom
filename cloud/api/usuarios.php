@@ -186,10 +186,23 @@ function correo_duplicado(PDO $pdo, string $correo, int $excluir_id = 0): bool
 
 function usuario_get(PDO $pdo, int $id): array
 {
+    // Devuelve todos los campos del registro excepto secretos (contrasena, clave, token),
+    // con los nombres resueltos para comunidad, casa y registrante.
     $stmt = $pdo->prepare(
-        'SELECT id, nombre, correo, telefono, dni, comunidad, casa, roles, estado
-           FROM usuarios
-          WHERE id = :id
+        'SELECT u.id, u.nombre, u.casa, u.comunidad, u.telefono, u.correo,
+                u.genero, u.nacimiento, u.dni, u.aplicacion,
+                u.ubicacionCoordenadas, u.ubicacionExactitud, u.ubicacionActualizada,
+                u.sistema, u.instalada, u.ejecutada,
+                u.avisos, u.notificaciones, u.whatsapps, u.mensajes, u.correos,
+                u.terminal, u.registrado, u.registrante, u.roles, u.estado, u.propiedades,
+                c.nombre  AS comunidad_nombre,
+                k.nombre  AS casa_nombre,
+                r.nombre  AS registrante_nombre
+           FROM usuarios u
+           LEFT JOIN comunidades c ON c.id = u.comunidad
+           LEFT JOIN casas       k ON k.id = u.casa
+           LEFT JOIN usuarios    r ON r.id = u.registrante
+          WHERE u.id = :id
           LIMIT 1'
     );
     $stmt->execute([':id' => $id]);
@@ -221,6 +234,25 @@ function usuarios_listar(PDO $pdo, array $opts = []): array
 
     $where  = [];
     $params = [];
+    if (isset($opts['filtro_id']) && ctype_digit((string) $opts['filtro_id']) && (int) $opts['filtro_id'] > 0) {
+        $where[] = 'u.id = :filtro_id';
+        $params[':filtro_id'] = (int) $opts['filtro_id'];
+    }
+    $nombre = trim((string) ($opts['nombre'] ?? ''));
+    if ($nombre !== '') {
+        $where[] = 'u.nombre LIKE :nombre';
+        $params[':nombre'] = '%' . $nombre . '%';
+    }
+    $correo = trim((string) ($opts['correo'] ?? ''));
+    if ($correo !== '') {
+        $where[] = 'u.correo LIKE :correo';
+        $params[':correo'] = '%' . $correo . '%';
+    }
+    $telefono = trim((string) ($opts['telefono'] ?? ''));
+    if ($telefono !== '') {
+        $where[] = 'u.telefono LIKE :telefono';
+        $params[':telefono'] = '%' . $telefono . '%';
+    }
     if (!empty($opts['comunidad']) && ctype_digit((string) $opts['comunidad'])) {
         $where[] = 'u.comunidad = :comunidad';
         $params[':comunidad'] = (int) $opts['comunidad'];
@@ -237,7 +269,7 @@ function usuarios_listar(PDO $pdo, array $opts = []): array
     }
 
     $sql = "SELECT u.id, u.nombre, u.correo, u.telefono, u.dni, u.roles, u.estado,
-                   u.comunidad, c.nombre AS comunidad_nombre, u.registrado
+                   u.comunidad, c.nombre AS comunidad_nombre, u.casa, u.registrado
               FROM usuarios u
               LEFT JOIN comunidades c ON c.id = u.comunidad";
     if ($where) {

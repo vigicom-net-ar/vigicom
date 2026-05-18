@@ -1,0 +1,62 @@
+# Convenciones de módulos ABM
+
+Reglas para generar módulos ABM (Alta, Baja, Modificación). Todo módulo nuevo debe respetarlas salvo indicación contraria.
+
+## Listado
+
+Las columnas del listado deben respetar este orden:
+
+1. **Primera columna: `Código`**
+   - Corresponde al ID de la tabla.
+   - El título de la columna es `Código` (no `ID`).
+
+2. **Columnas importantes de la tabla**
+   - Los campos relevantes de la entidad.
+
+3. **Columnas de acción, al final y en este orden:**
+   - **Consultar** — ícono de ojo.
+   - **Editar** — ícono de lápiz (`edit`).
+   - **Eliminar** — ícono de tacho (`trash`).
+
+### Límite de resultados
+- Por defecto: **100**.
+- Modificable por el usuario desde el campo `Límite` del buscador.
+
+## Buscador
+
+El formulario de búsqueda debe respetar este orden de campos:
+
+1. **Primer campo: `Código`**
+   - Tipo: numérico.
+   - Etiqueta: `Código`.
+   - Corresponde al ID de la entidad.
+
+2. **Campos comunes del recurso**
+   - Los filtros propios de la entidad, en el medio del formulario.
+
+3. **Último campo: `Límite`**
+   - Tipo: numérico con control up/down.
+   - Valor por defecto: `100`.
+
+4. **Ordenamiento (solo si corresponde al módulo)**
+   - Dos selects:
+     - Select con los campos por los que se puede ordenar.
+     - Select `Dirección` con dos opciones: `Ascendente` / `Descendente`.
+   - Si el módulo no requiere ordenamiento configurable, omitir este bloque.
+
+## Modales
+
+### Consultar
+- Al abrir el modal de **Consultar**, se deben mostrar **todos los campos** del registro seleccionado (no solo los que aparecen en el listado).
+- Los campos se muestran en modo lectura.
+- Cada campo se renderiza en una **tarjeta individual** (`div`) con:
+  - **Esquinas redondeadas**.
+  - **Color de fondo exactamente un 10% más oscuro** que el color de fondo del modal. Implementación recomendada en CSS: `background: color-mix(in srgb, var(--surface) 90%, #000);`. Este valor es **obligatorio** y no debe variarse por módulo.
+  - Etiqueta del campo y valor dentro de la misma tarjeta.
+- **Ancho de las tarjetas**:
+  - Cuando el valor del campo puede mostrarse con **pocos caracteres** (códigos, números, fechas, estados, booleanos, etc.), la tarjeta ocupa el **50% del ancho** de la fila, permitiendo dos tarjetas por fila.
+  - Cuando el valor requiere más espacio (descripciones largas, observaciones, direcciones completas, etc.), la tarjeta ocupa el **100% del ancho** de la fila.
+
+### Alta / Edición
+- El modal de **crear un nuevo registro** y el de **editar** deben incluir **todos los campos** de la entidad.
+- Ambos modales comparten la misma estructura de campos; la única diferencia es si vienen precargados con los datos del registro (edición) o vacíos (alta).

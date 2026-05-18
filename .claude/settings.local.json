@@ -9,7 +9,14 @@
       "PowerShell(curl.exe -sI http://localhost:8090/api/version.php)",
       "PowerShell(curl.exe -sI http://localhost:8090/assets/css/style.css)",
       "PowerShell(curl.exe -sI http://localhost:8090/assets/img/reactor_white.png)",
-      "PowerShell(curl.exe -sI http://localhost:8090/assets/css/app.css)"
+      "PowerShell(curl.exe -sI http://localhost:8090/assets/css/app.css)",
+      "Bash(node --check c:/Users/Javier/Documents/Repositorios/vigicom/cloud/assets/js/app.js)",
+      "Bash(php -l c:/Users/Javier/Documents/Repositorios/vigicom/cloud/api/senales.php)",
+      "PowerShell(php -l \"c:\\\\Users\\\\Javier\\\\Documents\\\\Repositorios\\\\vigicom\\\\cloud\\\\api\\\\senales.php\")",
+      "Bash(php -l \"c:/Users/Javier/Documents/Repositorios/vigicom/cloud/api/equipos.php\")",
+      "Bash(node --check \"c:/Users/Javier/Documents/Repositorios/vigicom/cloud/assets/js/app.js\")",
+      "Bash(grep -n \"CREATE TABLE \\\\`casas\\\\`\" c:/Users/Javier/Documents/Repositorios/vigicom/db/schema.sql)",
+      "PowerShell(Get-ChildItem c:\\\\Users\\\\Javier\\\\Documents\\\\Repositorios\\\\vigicom\\\\cloud\\\\assets\\\\js\\\\app.js, c:\\\\Users\\\\Javier\\\\Documents\\\\Repositorios\\\\vigicom\\\\cloud\\\\assets\\\\css\\\\app.css, c:\\\\Users\\\\Javier\\\\Documents\\\\Repositorios\\\\vigicom\\\\cloud\\\\index.php | Select-Object FullName, @{N='Lines';E={\\(Get-Content $_.FullName\\).Count}})"
     ]
   }
 }

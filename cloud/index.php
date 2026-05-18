@@ -33,12 +33,18 @@ $cssBust = $version === '0.0.dev' ? (string) time() : $version;
         </div>
 
         <nav class="sidebar-nav" id="sidebarNav">
-            <a class="nav-item" href="#/dashboard"    data-route="/dashboard">
-                <span class="nav-icon">📊</span><span>Dashboard</span>
-            </a>
-            <a class="nav-item" href="#/clientes"     data-route="/clientes">
-                <span class="nav-icon">👥</span><span>Clientes</span>
-            </a>
+            <div class="nav-group-wrap" data-group="inicio">
+                <button type="button" class="nav-item nav-group-toggle">
+                    <span class="nav-icon">🏁</span>
+                    <span class="nav-group-label">Inicio</span>
+                    <span class="nav-group-arrow">+</span>
+                </button>
+                <div class="nav-sub">
+                    <a class="nav-item nav-sub-item" href="#/dashboard" data-route="/dashboard">
+                        <span class="nav-icon">📊</span><span>Dashboard</span>
+                    </a>
+                </div>
+            </div>
 
             <div class="nav-group-wrap" data-group="inventario">
                 <button type="button" class="nav-item nav-group-toggle">
@@ -48,26 +54,51 @@ $cssBust = $version === '0.0.dev' ? (string) time() : $version;
                 </button>
                 <div class="nav-sub">
                     <a class="nav-item nav-sub-item" href="#/comunidades" data-route="/comunidades">
-                        <span class="nav-icon">🏘️</span><span>Comunidad</span>
+                        <span class="nav-icon">🏘️</span><span>Comunidades</span>
                     </a>
                     <a class="nav-item nav-sub-item" href="#/casas" data-route="/casas">
                         <span class="nav-icon">🏠</span><span>Casas</span>
                     </a>
+                    <a class="nav-item nav-sub-item" href="#/alarmas" data-route="/alarmas">
+                        <span class="nav-icon">🚨</span><span>Alarmas</span>
+                    </a>
+                    <a class="nav-item nav-sub-item" href="#/equipos" data-route="/equipos">
+                        <span class="nav-icon">🛰️</span><span>Equipos</span>
+                    </a>
                 </div>
             </div>
 
-            <a class="nav-item" href="#/dispositivos" data-route="/dispositivos">
-                <span class="nav-icon">🛰️</span><span>Dispositivos</span>
-            </a>
-            <a class="nav-item" href="#/eventos"      data-route="/eventos">
-                <span class="nav-icon">🔔</span><span>Eventos</span>
-            </a>
-            <a class="nav-item" href="#/reportes"     data-route="/reportes">
-                <span class="nav-icon">📋</span><span>Reportes</span>
-            </a>
-            <a class="nav-item" href="#/config"       data-route="/config">
-                <span class="nav-icon">⚙️</span><span>Configuración</span>
-            </a>
+            <div class="nav-group-wrap" data-group="ventas">
+                <button type="button" class="nav-item nav-group-toggle">
+                    <span class="nav-icon">💰</span>
+                    <span class="nav-group-label">Ventas</span>
+                    <span class="nav-group-arrow">+</span>
+                </button>
+                <div class="nav-sub">
+                    <a class="nav-item nav-sub-item" href="#/clientes" data-route="/clientes">
+                        <span class="nav-icon">👥</span><span>Clientes</span>
+                    </a>
+                </div>
+            </div>
+
+            <div class="nav-group-wrap" data-group="registros">
+                <button type="button" class="nav-item nav-group-toggle">
+                    <span class="nav-icon">📝</span>
+                    <span class="nav-group-label">Registros</span>
+                    <span class="nav-group-arrow">+</span>
+                </button>
+                <div class="nav-sub">
+                    <a class="nav-item nav-sub-item" href="#/eventos" data-route="/eventos">
+                        <span class="nav-icon">🔔</span><span>Eventos</span>
+                    </a>
+                    <a class="nav-item nav-sub-item" href="#/senales" data-route="/senales">
+                        <span class="nav-icon">📡</span><span>Señales</span>
+                    </a>
+                    <a class="nav-item nav-sub-item" href="#/reportes" data-route="/reportes">
+                        <span class="nav-icon">📋</span><span>Reportes</span>
+                    </a>
+                </div>
+            </div>
 
             <div class="nav-group-wrap" data-group="seguridad">
                 <button type="button" class="nav-item nav-group-toggle">
@@ -81,6 +112,19 @@ $cssBust = $version === '0.0.dev' ? (string) time() : $version;
                     </a>
                     <a class="nav-item nav-sub-item" href="#/roles" data-route="/roles">
                         <span class="nav-icon">🛡️</span><span>Roles</span>
+                    </a>
+                </div>
+            </div>
+
+            <div class="nav-group-wrap" data-group="administracion">
+                <button type="button" class="nav-item nav-group-toggle">
+                    <span class="nav-icon">🛠️</span>
+                    <span class="nav-group-label">Administración</span>
+                    <span class="nav-group-arrow">+</span>
+                </button>
+                <div class="nav-sub">
+                    <a class="nav-item nav-sub-item" href="#/config" data-route="/config">
+                        <span class="nav-icon">⚙️</span><span>Configuración</span>
                     </a>
                 </div>
             </div>

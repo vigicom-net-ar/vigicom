@@ -149,10 +149,21 @@ function casa_validar_payload(array &$datos): void
 
 function casa_get(PDO $pdo, int $id): array
 {
+    // Devuelve todos los campos del registro, con nombres resueltos para los
+    // identificadores referenciados (comunidad, ciudad, usuario, cliente, contrato).
     $stmt = $pdo->prepare(
-        'SELECT id, comunidad, nombre, domicilio, latitud, longitud, monitoreo, estado
-           FROM casas
-          WHERE id = :id
+        'SELECT k.id, k.comunidad, k.nombre, k.domicilio, k.ciudad,
+                k.latitud, k.longitud, k.grupos,
+                k.usuario, k.cliente, k.contrato,
+                k.alta, k.monitoreo, k.estado,
+                c.nombre  AS comunidad_nombre,
+                u.nombre  AS usuario_nombre,
+                CONCAT_WS(", ", ci.localidad, ci.provincia) AS ciudad_nombre
+           FROM casas k
+           LEFT JOIN comunidades c  ON c.id  = k.comunidad
+           LEFT JOIN usuarios    u  ON u.id  = k.usuario
+           LEFT JOIN ciudades    ci ON ci.id = k.ciudad
+          WHERE k.id = :id
           LIMIT 1'
     );
     $stmt->execute([':id' => $id]);
@@ -178,12 +189,21 @@ function casas_listar(PDO $pdo, array $opts = []): array
     }
     $dir = strtolower((string) ($opts['dir'] ?? 'desc')) === 'asc' ? 'ASC' : 'DESC';
 
-    $limit = isset($opts['limit']) && ctype_digit((string) $opts['limit']) ? (int) $opts['limit'] : 200;
-    if ($limit < 1)    { $limit = 200; }
+    $limit = isset($opts['limit']) && ctype_digit((string) $opts['limit']) ? (int) $opts['limit'] : 100;
+    if ($limit < 1)    { $limit = 100; }
     if ($limit > 1000) { $limit = 1000; }
 
     $where  = [];
     $params = [];
+    if (isset($opts['filtro_id']) && ctype_digit((string) $opts['filtro_id']) && (int) $opts['filtro_id'] > 0) {
+        $where[] = 'k.id = :filtro_id';
+        $params[':filtro_id'] = (int) $opts['filtro_id'];
+    }
+    $nombre = trim((string) ($opts['nombre'] ?? ''));
+    if ($nombre !== '') {
+        $where[] = 'k.nombre LIKE :nombre';
+        $params[':nombre'] = '%' . $nombre . '%';
+    }
     if (!empty($opts['comunidad']) && ctype_digit((string) $opts['comunidad'])) {
         $where[] = 'k.comunidad = :comunidad';
         $params[':comunidad'] = (int) $opts['comunidad'];

@@ -354,16 +354,25 @@ tbody tr:hover { background: var(--row-hover); }
 .action-menu-divider           { height: 1px; background: var(--border); margin: 4px 0; }
 
 /* ===== 22. Data list (consulta) ===== */
-.data-list  { display: flex; flex-direction: column; gap: 14px; }
-.data-row   { display: flex; flex-direction: column; gap: 4px; }
+.data-list  { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+              gap: 12px; }
+.data-row   { background: color-mix(in srgb, var(--surface) 90%, #000);
+              border: 1px solid var(--border);
+              border-radius: 10px; padding: 12px 14px;
+              display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.data-row.data-row-full { grid-column: 1 / -1; }
 .data-label { font-size: .75rem; font-weight: 600;
               text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 .data-value { font-size: .9rem; color: var(--text);
               word-break: break-word; white-space: pre-wrap; }
 .data-value.muted { color: var(--muted); font-style: italic; }
 .data-value code  { font-family: monospace; font-size: .85rem;
-                    background: var(--bg); border: 1px solid var(--border);
+                    background: var(--surface); border: 1px solid var(--border);
                     border-radius: 6px; padding: 2px 8px; }
+
+@media (max-width: 600px) {
+    .data-list { grid-template-columns: 1fr; }
+}
 
 /* ===== 23. JSON editor ===== */
 .json-editor {
