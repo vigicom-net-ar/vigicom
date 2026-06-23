@@ -24,7 +24,6 @@ docker compose up -d
 Servicios expuestos:
 
 - Panel cloud: http://localhost:8090
-- phpMyAdmin: http://localhost:8091
-- MySQL: `localhost:3310` (user `root`, pass `root`, db `vigicom-dev`)
+- MySQL: `localhost:3310` (user `root`, pass `root`, db `vigicom_dev`)
 
 Luego abrir http://localhost:8090/install.php una sola vez para crear las tablas y el usuario admin inicial, y **borrar `install.php`** después.

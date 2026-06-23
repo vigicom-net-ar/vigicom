@@ -124,7 +124,7 @@ $cssBust = $version === '0.0.dev' ? (string) time() : $version;
                 </button>
                 <div class="nav-sub">
                     <a class="nav-item nav-sub-item" href="#/config" data-route="/config">
-                        <span class="nav-icon">⚙️</span><span>Configuración</span>
+                        <span class="nav-icon">⚙️</span><span>Herramientas</span>
                     </a>
                 </div>
             </div>

@@ -58,9 +58,9 @@ Todo lo demás pasa por `/api/*.php`.
 
 ## Setup en local
 
-1. Crear la base (el guion exige backticks):
+1. Crear la base:
    ```sql
-   CREATE DATABASE `vigicom-dev` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+   CREATE DATABASE vigicom_dev CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
    ```
 2. Variables de entorno en `.env.development` (en la raíz del repo): `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASS`, `APP_KEY`.
 3. Levantar el contenedor Docker (puerto 8086) o apuntar un vhost local al directorio `cloud/`.

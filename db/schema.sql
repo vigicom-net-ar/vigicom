@@ -5,7 +5,7 @@
  Source Server Type    : MySQL
  Source Server Version : 80046
  Source Host           : localhost:3310
- Source Schema         : vigicom-dev
+ Source Schema         : vigicom_dev
 
  Target Server Type    : MySQL
  Target Server Version : 80046

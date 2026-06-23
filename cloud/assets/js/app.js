@@ -35,7 +35,7 @@
         '/reportes':     { title: 'Reportes',      render: renderTodo },
         '/usuarios':     { title: 'Usuarios',      render: renderUsuarios },
         '/roles':        { title: 'Roles',         render: renderRoles },
-        '/config':       { title: 'Configuración', render: renderTodo }
+        '/config':       { title: 'Herramientas',  render: renderConfig }
     };
 
     function currentRoute() {
@@ -3151,6 +3151,12 @@
                         '<i class="fa-solid fa-filter"></i> Filtros' + badgeFiltros +
                     '</button>' +
                 '</div>' +
+                '<div class="toolbar-right">' +
+                    '<button class="btn btn-secondary" id="senMonitor" type="button" ' +
+                            'title="Monitor en tiempo real de señales entrantes">' +
+                        '<i class="fa-solid fa-tower-broadcast"></i> Ver en tiempo real' +
+                    '</button>' +
+                '</div>' +
             '</div>' +
 
             '<div class="table-card">' +
@@ -3293,6 +3299,8 @@
             searchInput.focus();
         });
 
+        document.getElementById('senMonitor').addEventListener('click', openSenalesLiveMonitorModal);
+
         document.getElementById('senFiltros').addEventListener('click', function () {
             filtrosModal.classList.add('open');
         });
@@ -3327,6 +3335,220 @@
             senalesFiltros.limit     = parseInt(document.getElementById('sflt-limit').value, 10) || 200;
             filtrosModal.classList.remove('open');
             navigate();
+        });
+    }
+
+    /* Modal "Monitor en tiempo real" (Señales).
+     *
+     * Modal tipo log de consola/terminal que muestra las señales que van
+     * ingresando en vivo, poll-eando `senales_live.php` cada 100 ms (el
+     * guard `fetching` evita pisar requests si el server tarda).
+     *
+     * Tabla real: db/schema.sql -> `senales` (id, fecha, sentido,
+     * propagacion, texto, prioridad, intentos, procesada, estado).
+     *
+     *   - vive en un modal `signals-monitor-modal` (≈1000px de ancho).
+     *   - estética terminal: fondo `#0a0a0a`, font monoespaciada.
+     *   - orden cronológico ascendente (nuevas abajo, auto-scroll).
+     *   - pausa manual (botón) + pausa por hover sobre la consola.
+     *   - el timer se limpia al cerrar el modal.
+     */
+    function openSenalesLiveMonitorModal() {
+        var MAX_ROWS = 250;
+        var TICK_MS  = 100;
+
+        var backdrop = document.createElement('div');
+        backdrop.className = 'modal-backdrop';
+        backdrop.innerHTML =
+            '<div class="modal signals-monitor-modal" role="dialog" aria-modal="true" aria-labelledby="sen-monitor-title">' +
+                '<div class="modal-header">' +
+                    '<div class="modal-title" id="sen-monitor-title">' +
+                        'Monitor en tiempo real' +
+                        '<span class="dash-live-status" id="sen-monitor-status">' +
+                            '<span class="live-dot"></span> En vivo · 100 ms' +
+                        '</span>' +
+                    '</div>' +
+                    '<div class="signals-monitor-controls">' +
+                        '<button type="button" class="btn-icon-sm" id="sen-monitor-toggle" ' +
+                                'title="Pausar" aria-label="Pausar feed">' +
+                            '<i class="fa-solid fa-pause"></i>' +
+                        '</button>' +
+                        '<button type="button" class="btn-icon-sm" data-act="close" aria-label="Cerrar">&times;</button>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="modal-body">' +
+                    '<div class="signals-monitor-console" id="sen-monitor-console">' +
+                        '<div class="signals-monitor-empty">$ esperando señales…<span class="signals-monitor-caret"></span></div>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="modal-footer">' +
+                    '<span class="signals-monitor-footer-info">' +
+                        '<i class="fa-solid fa-terminal"></i> ' +
+                        '<strong id="sen-monitor-count">0</strong> de <strong>' + MAX_ROWS + '</strong> líneas' +
+                    '</span>' +
+                    '<button class="btn btn-ghost" data-act="close" type="button">Cerrar</button>' +
+                '</div>' +
+            '</div>';
+        document.body.appendChild(backdrop);
+        requestAnimationFrame(function () { backdrop.classList.add('open'); });
+
+        var modal      = backdrop.querySelector('.modal');
+        var console_   = backdrop.querySelector('#sen-monitor-console');
+        var status     = backdrop.querySelector('#sen-monitor-status');
+        var toggle     = backdrop.querySelector('#sen-monitor-toggle');
+        var countLabel = backdrop.querySelector('#sen-monitor-count');
+
+        // Buffer cronológico ascendente: índice 0 = más vieja, último = más nueva.
+        var buffer      = [];
+        var maxId       = 0;
+        var userPaused  = false;
+        var hoverPaused = false;
+        var fetching    = false;
+        var firstTick   = true;
+
+        function isPaused() { return userPaused || hoverPaused; }
+
+        function updateStatus() {
+            if (userPaused) {
+                status.innerHTML = '<span class="live-dot"></span> Pausado';
+                modal.classList.add('live-paused');
+            } else if (hoverPaused) {
+                status.innerHTML = '<span class="live-dot"></span> En pausa (hover)';
+                modal.classList.add('live-paused');
+            } else {
+                status.innerHTML = '<span class="live-dot"></span> En vivo · 100 ms';
+                modal.classList.remove('live-paused');
+            }
+        }
+
+        function fmtTs(v) {
+            if (!v) return '—';
+            return String(v).replace('T', ' ').replace(/\.\d+$/, '');
+        }
+
+        function sentidoBits(s) {
+            if (s === 'E' || s === 'I') return { cls: 'log-in',    txt: ' IN' };
+            if (s === 'S' || s === 'O') return { cls: 'log-out',   txt: 'OUT' };
+            return { cls: 'log-muted', txt: ' --' };
+        }
+
+        function prioBits(p) {
+            var v = (p == null ? '' : String(p)).toUpperCase();
+            if (v === 'A' || v === '1' || v === 'H') return { cls: 'log-prio-high', txt: v || '—' };
+            if (v === 'M' || v === '2')              return { cls: 'log-prio-mid',  txt: v };
+            if (v === '')                            return { cls: 'log-prio-low',  txt: '—' };
+            return { cls: 'log-prio-low', txt: v };
+        }
+
+        function renderLine(s, isNew) {
+            var sb   = sentidoBits(s.sentido);
+            var pb   = prioBits(s.prioridad);
+            var prop = s.propagacion ? e(s.propagacion) : '—';
+            var txt  = (s.texto != null && s.texto !== '')
+                ? e(String(s.texto).replace(/\s+/g, ' ').trim())
+                : '—';
+            var procesada = s.procesada
+                ? '<span class="log-processed" title="Procesada ' + e(fmtTs(s.procesada)) + '"><i class="fa-solid fa-check"></i></span>'
+                : '<span class="log-pending" title="Pendiente"><i class="fa-regular fa-clock"></i></span>';
+
+            return '<div class="log-line' + (isNew ? ' is-new' : '') + '" data-id="' + s.id + '">' +
+                '<span class="log-ts">' + e(fmtTs(s.fecha)) + '</span>' +
+                '<span class="log-sep">│</span>' +
+                '<span class="log-id">#' + s.id + '</span>' +
+                '<span class="log-sep">│</span>' +
+                '<span class="log-arrow ' + sb.cls + '">' + sb.txt + '</span>' +
+                '<span class="log-sep">│</span>' +
+                '<span class="log-prio ' + pb.cls + '">' + pb.txt + '</span>' +
+                '<span class="log-sep">│</span>' +
+                '<span class="log-prop">' + prop + '</span>' +
+                '<span class="log-sep">│</span>' +
+                '<span class="log-msg">' + txt + '</span>' +
+                '<span class="log-sep">│</span>' +
+                procesada +
+            '</div>';
+        }
+
+        function scrollToBottom() { console_.scrollTop = console_.scrollHeight; }
+
+        function repaintAll() {
+            countLabel.textContent = String(buffer.length);
+            if (!buffer.length) {
+                console_.innerHTML = '<div class="signals-monitor-empty">$ esperando señales…<span class="signals-monitor-caret"></span></div>';
+                return;
+            }
+            console_.innerHTML = buffer.map(function (s) { return renderLine(s, false); }).join('');
+        }
+
+        function appendNew(newAsc) {
+            var empty = console_.querySelector('.signals-monitor-empty');
+            if (empty) empty.remove();
+
+            console_.insertAdjacentHTML('beforeend',
+                newAsc.map(function (s) { return renderLine(s, true); }).join('')
+            );
+
+            // Trim del DOM si el buffer ya cortó por el principio.
+            var lines = console_.querySelectorAll('.log-line');
+            var overflow = lines.length - buffer.length;
+            for (var i = 0; i < overflow; i++) lines[i].remove();
+
+            countLabel.textContent = String(buffer.length);
+            scrollToBottom();
+        }
+
+        async function tick() {
+            if (!document.body.contains(backdrop)) return;
+            if (fetching || isPaused()) return;
+            fetching = true;
+            try {
+                var data = await api('/api/senales_live.php?since_id=' + maxId + '&limit=' + MAX_ROWS);
+                if (data.last_id > maxId) maxId = data.last_id;
+
+                // senales_live.php devuelve DESC (nuevas primero); las invertimos
+                // a orden cronológico ascendente para el log estilo `tail -f`.
+                var incoming = (data.senales || []).slice().reverse();
+                if (!incoming.length) return;
+
+                if (firstTick) {
+                    firstTick = false;
+                    buffer = incoming.slice(-MAX_ROWS);
+                    repaintAll();
+                    scrollToBottom();
+                } else {
+                    buffer = buffer.concat(incoming).slice(-MAX_ROWS);
+                    appendNew(incoming);
+                }
+            } catch (_) {
+                // Silencioso: el polling se reintenta solo en el próximo tick.
+            } finally {
+                fetching = false;
+            }
+        }
+
+        toggle.addEventListener('click', function () {
+            userPaused = !userPaused;
+            toggle.innerHTML = userPaused
+                ? '<i class="fa-solid fa-play"></i>'
+                : '<i class="fa-solid fa-pause"></i>';
+            toggle.title = userPaused ? 'Reanudar' : 'Pausar';
+            toggle.setAttribute('aria-label', toggle.title + ' feed');
+            updateStatus();
+        });
+        console_.addEventListener('mouseenter', function () { hoverPaused = true;  updateStatus(); });
+        console_.addEventListener('mouseleave', function () { hoverPaused = false; updateStatus(); });
+
+        updateStatus();
+        tick();
+        var intervalId = setInterval(tick, TICK_MS);
+
+        function close() {
+            clearInterval(intervalId);
+            backdrop.classList.remove('open');
+            setTimeout(function () { backdrop.remove(); }, 200);
+        }
+        backdrop.addEventListener('click', function (ev) { if (ev.target === backdrop) close(); });
+        backdrop.querySelectorAll('[data-act="close"]').forEach(function (b) {
+            b.addEventListener('click', close);
         });
     }
 
@@ -3943,6 +4165,383 @@
         });
 
         applyFilters();
+    }
+
+    // -------- Vista: Herramientas -----------------------------------------
+
+    async function renderConfig(view) {
+        view.innerHTML =
+            '<div class="page-header"><div>' +
+                '<h1>Herramientas</h1>' +
+                '<p>Ajustes generales y parámetros del sistema.</p>' +
+            '</div></div>' +
+
+            '<div class="tile-grid">' +
+                '<button type="button" class="tile-card" id="cfgTileParametros">' +
+                    '<span class="tile-icon">⚙️</span>' +
+                    '<span class="tile-title">Parámetros</span>' +
+                    '<span class="tile-desc">Variables internas del sistema.</span>' +
+                '</button>' +
+            '</div>' +
+
+            modalParametroFormHtml() +
+            modalConsultarParametroHtml() +
+            confirmDeleteParametroHtml() +
+            modalParametrosListaHtml();
+
+        wireConfigView();
+    }
+
+    function modalParametrosListaHtml() {
+        return '<div class="modal-backdrop" id="paramListModal"><div class="modal modal-xl">' +
+            '<div class="modal-header">' +
+                '<div class="modal-title"><span>Parámetros</span></div>' +
+                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+            '</div>' +
+            '<div class="modal-body">' +
+                '<div class="toolbar" style="margin-bottom:0;">' +
+                    '<div class="toolbar-left">' +
+                        '<div class="search-wrap">' +
+                            '<input type="search" id="paramSearch" class="search-input" placeholder="Buscar variable, valor o comentario...">' +
+                            '<button class="search-clear" id="paramSearchClear" type="button" style="display:none;">&times;</button>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="toolbar-right">' +
+                        '<button class="btn btn-primary" id="paramNuevo" type="button">+ Nuevo parámetro</button>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="table-card">' +
+                    '<table><thead><tr>' +
+                        '<th>Código</th><th>Variable</th><th>Valor</th><th>Comentario</th>' +
+                        '<th style="text-align:right;">Acciones</th>' +
+                    '</tr></thead><tbody id="paramTbody">' +
+                        '<tr><td colspan="5" class="table-empty">Cargando…</td></tr>' +
+                    '</tbody></table>' +
+                    '<div class="table-empty" id="paramEmpty" style="display:none;">No hay parámetros que coincidan con la búsqueda.</div>' +
+                '</div>' +
+                '<div class="text-muted text-sm" id="paramCount"></div>' +
+            '</div>' +
+            '<div class="modal-footer">' +
+                '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+            '</div>' +
+        '</div></div>';
+    }
+
+    function modalParametroFormHtml() {
+        return '<div class="modal-backdrop" id="paramFormModal"><div class="modal">' +
+            '<div class="modal-header">' +
+                '<div class="modal-title">' +
+                    '<span id="paramFormTitulo">Nuevo parámetro</span>' +
+                    '<span class="modal-subtitle" id="paramFormSub"></span>' +
+                '</div>' +
+                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+            '</div>' +
+            '<form id="paramForm" novalidate>' +
+                '<input type="hidden" id="paramId" value="">' +
+                '<div class="modal-body">' +
+                    '<div class="alert alert-error" id="paramFormError" style="display:none;"></div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group" style="flex:1 1 100%;"><label for="param-variable">Variable</label>' +
+                            '<input id="param-variable" name="variable" type="text" maxlength="255" required></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group" style="flex:1 1 100%;"><label for="param-valor">Valor</label>' +
+                            '<input id="param-valor" name="valor" type="text" maxlength="255"></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group" style="flex:1 1 100%;"><label for="param-comentario">Comentario</label>' +
+                            '<textarea id="param-comentario" name="comentario" rows="3" maxlength="1024"></textarea></div>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="modal-footer">' +
+                    '<button type="button" class="btn btn-ghost" data-act="close">Cancelar</button>' +
+                    '<button type="submit" class="btn btn-primary" id="paramGuardar">Guardar</button>' +
+                '</div>' +
+            '</form>' +
+        '</div></div>';
+    }
+
+    function modalConsultarParametroHtml() {
+        return '<div class="modal-backdrop" id="paramConsultar"><div class="modal">' +
+            '<div class="modal-header">' +
+                '<div class="modal-title">' +
+                    '<span>Consultar parámetro</span>' +
+                    '<span class="modal-subtitle" id="paramConsultarSub"></span>' +
+                '</div>' +
+                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+            '</div>' +
+            '<div class="modal-body">' +
+                '<dl class="data-list" id="paramConsultarBody"></dl>' +
+            '</div>' +
+            '<div class="modal-footer">' +
+                '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+            '</div>' +
+        '</div></div>';
+    }
+
+    function confirmDeleteParametroHtml() {
+        return '<div class="confirm-backdrop" id="paramConfirm"><div class="confirm-box">' +
+            '<div class="confirm-title">Eliminar parámetro</div>' +
+            '<div class="confirm-msg" id="paramConfirmMsg">Esta acción no se puede deshacer.</div>' +
+            '<div class="confirm-actions">' +
+                '<button class="btn btn-ghost"  data-act="cancel" type="button">Cancelar</button>' +
+                '<button class="btn btn-danger" id="paramConfirmBtn" type="button">Eliminar</button>' +
+            '</div>' +
+        '</div></div>';
+    }
+
+    function renderFilasParametros(parametros) {
+        if (!parametros.length) {
+            return '<tr><td colspan="5" class="table-empty">No hay parámetros cargados.</td></tr>';
+        }
+        return parametros.map(function (p) {
+            var busq = String((p.variable || '') + ' ' + (p.valor || '') + ' ' + (p.comentario || '')).toLowerCase().trim();
+            return '<tr data-id="' + p.id + '" data-search="' + e(busq) + '">' +
+                '<td class="td-id">#' + p.id + '</td>' +
+                '<td><div class="td-nombre">' + e(p.variable || '—') + '</div></td>' +
+                '<td>' + e(p.valor || '—') + '</td>' +
+                '<td>' + e(p.comentario || '—') + '</td>' +
+                '<td>' +
+                    '<div class="actions" style="justify-content:flex-end;">' +
+                        '<button class="btn-icon-sm" data-act="view"   type="button" title="Consultar"><i class="fa-solid fa-eye"></i></button>' +
+                        '<button class="btn-icon-sm" data-act="edit"   type="button" title="Editar"><i class="fa-solid fa-pencil"></i></button>' +
+                        '<button class="btn-icon-sm" data-act="delete" type="button" title="Eliminar"><i class="fa-solid fa-trash"></i></button>' +
+                    '</div>' +
+                '</td>' +
+            '</tr>';
+        }).join('');
+    }
+
+    function wireConfigView() {
+        var listModal   = document.getElementById('paramListModal');
+        var tbody       = document.getElementById('paramTbody');
+        var emptyEl     = document.getElementById('paramEmpty');
+        var countEl     = document.getElementById('paramCount');
+        var searchInput = document.getElementById('paramSearch');
+        var searchClear = document.getElementById('paramSearchClear');
+
+        var formModal   = document.getElementById('paramFormModal');
+        var formTitulo  = document.getElementById('paramFormTitulo');
+        var formSub     = document.getElementById('paramFormSub');
+        var formError   = document.getElementById('paramFormError');
+        var form        = document.getElementById('paramForm');
+        var fId         = document.getElementById('paramId');
+        var btnGuardar  = document.getElementById('paramGuardar');
+
+        var consultar     = document.getElementById('paramConsultar');
+        var consultarSub  = document.getElementById('paramConsultarSub');
+        var consultarBody = document.getElementById('paramConsultarBody');
+
+        var confirmBox = document.getElementById('paramConfirm');
+        var confirmMsg = document.getElementById('paramConfirmMsg');
+        var btnDelete  = document.getElementById('paramConfirmBtn');
+
+        var pendingDeleteId = null;
+        var modoEdicion     = false;
+
+        function abrirListModal() { listModal.classList.add('open'); }
+        function cerrarListModal() { listModal.classList.remove('open'); }
+        function abrirFormModal() { formModal.classList.add('open'); }
+        function cerrarFormModal() {
+            formModal.classList.remove('open');
+            formError.style.display = 'none';
+            formError.textContent = '';
+        }
+        function showFormError(msg) {
+            formError.textContent = msg;
+            formError.style.display = '';
+        }
+        function resetForm() {
+            form.reset();
+            fId.value = '';
+        }
+
+        async function cargarLista() {
+            tbody.innerHTML = '<tr><td colspan="5" class="table-empty">Cargando…</td></tr>';
+            emptyEl.style.display = 'none';
+            countEl.textContent = '';
+            try {
+                var d    = await api('/api/parametros.php');
+                var rows = d.parametros || [];
+                tbody.innerHTML = renderFilasParametros(rows);
+                countEl.textContent = 'Mostrando ' + rows.length + ' parámetro(s).';
+                aplicarBusqueda();
+            } catch (err) {
+                tbody.innerHTML = '<tr><td colspan="5" class="table-empty">' + e(err.message) + '</td></tr>';
+            }
+        }
+
+        function aplicarBusqueda() {
+            var q = (searchInput.value || '').toLowerCase().trim();
+            searchClear.style.display = q ? '' : 'none';
+            var visibles = 0;
+            var hayFilas = false;
+            tbody.querySelectorAll('tr[data-id]').forEach(function (tr) {
+                hayFilas = true;
+                var ok = !q || (tr.dataset.search || '').indexOf(q) !== -1;
+                tr.style.display = ok ? '' : 'none';
+                if (ok) visibles++;
+            });
+            emptyEl.style.display = (hayFilas && visibles === 0) ? '' : 'none';
+        }
+
+        document.getElementById('cfgTileParametros').addEventListener('click', function () {
+            searchInput.value = '';
+            searchClear.style.display = 'none';
+            abrirListModal();
+            cargarLista();
+        });
+
+        listModal.addEventListener('click', function (ev) {
+            if (ev.target === listModal || ev.target.closest('[data-act="close"]')) {
+                cerrarListModal();
+            }
+        });
+
+        searchInput.addEventListener('input', aplicarBusqueda);
+        searchClear.addEventListener('click', function () {
+            searchInput.value = '';
+            aplicarBusqueda();
+            searchInput.focus();
+        });
+
+        document.getElementById('paramNuevo').addEventListener('click', function () {
+            modoEdicion = false;
+            resetForm();
+            formTitulo.textContent = 'Nuevo parámetro';
+            formSub.textContent    = '';
+            abrirFormModal();
+            document.getElementById('param-variable').focus();
+        });
+
+        formModal.addEventListener('click', function (ev) {
+            if (ev.target === formModal || ev.target.closest('[data-act="close"]')) {
+                cerrarFormModal();
+            }
+        });
+
+        consultar.addEventListener('click', function (ev) {
+            if (ev.target === consultar || ev.target.closest('[data-act="close"]')) {
+                consultar.classList.remove('open');
+            }
+        });
+
+        async function abrirConsulta(id) {
+            consultarSub.innerHTML  = '<code>#' + id + '</code>';
+            consultarBody.innerHTML = '<div style="display:flex;justify-content:center;padding:24px"><div class="spin"></div></div>';
+            consultar.classList.add('open');
+
+            var p;
+            try {
+                p = await api('/api/parametros.php?id=' + id);
+            } catch (err) {
+                consultarBody.innerHTML = '<div class="alert alert-error">' + e(err.message) + '</div>';
+                return;
+            }
+
+            consultarSub.innerHTML  = '<code>#' + p.id + '</code>';
+            consultarBody.innerHTML =
+                abmRow    ('Código',     '<code>#' + p.id + '</code>') +
+                abmRowTxt ('Variable',   p.variable,   'Sin variable') +
+                abmRowTxt ('Valor',      p.valor,      'Sin valor',      true) +
+                abmRowTxt ('Comentario', p.comentario, 'Sin comentario', true);
+        }
+
+        tbody.addEventListener('click', async function (ev) {
+            var btn = ev.target.closest('button[data-act]');
+            if (!btn || btn.disabled) return;
+            var tr = btn.closest('tr[data-id]');
+            if (!tr) return;
+            var id = parseInt(tr.dataset.id, 10);
+
+            if (btn.dataset.act === 'view') {
+                abrirConsulta(id);
+                return;
+            }
+
+            if (btn.dataset.act === 'edit') {
+                try {
+                    var p = await api('/api/parametros.php?id=' + id);
+                    modoEdicion = true;
+                    resetForm();
+                    fId.value = p.id;
+                    formTitulo.textContent = 'Editar parámetro';
+                    formSub.textContent    = '#' + p.id;
+                    document.getElementById('param-variable').value   = p.variable   || '';
+                    document.getElementById('param-valor').value      = p.valor      || '';
+                    document.getElementById('param-comentario').value = p.comentario || '';
+                    abrirFormModal();
+                    document.getElementById('param-variable').focus();
+                } catch (err) {
+                    toast(err.message, true);
+                }
+                return;
+            }
+
+            if (btn.dataset.act === 'delete') {
+                var variable = (tr.querySelector('.td-nombre') || {}).textContent || ('#' + id);
+                confirmMsg.textContent = '¿Eliminar el parámetro "' + variable.trim() + '"? Esta acción no se puede deshacer.';
+                pendingDeleteId = id;
+                confirmBox.classList.add('open');
+            }
+        });
+
+        confirmBox.addEventListener('click', function (ev) {
+            if (ev.target === confirmBox || ev.target.closest('[data-act="cancel"]')) {
+                confirmBox.classList.remove('open');
+                pendingDeleteId = null;
+            }
+        });
+
+        btnDelete.addEventListener('click', async function () {
+            if (!pendingDeleteId) return;
+            btnDelete.disabled = true;
+            try {
+                await api('/api/parametros.php?id=' + pendingDeleteId, { method: 'DELETE' });
+                toast('Parámetro eliminado.');
+                confirmBox.classList.remove('open');
+                pendingDeleteId = null;
+                await cargarLista();
+            } catch (err) {
+                toast(err.message, true);
+            } finally {
+                btnDelete.disabled = false;
+            }
+        });
+
+        form.addEventListener('submit', async function (ev) {
+            ev.preventDefault();
+            formError.style.display = 'none';
+
+            var payload = {
+                variable:   document.getElementById('param-variable').value.trim(),
+                valor:      document.getElementById('param-valor').value.trim(),
+                comentario: document.getElementById('param-comentario').value.trim()
+            };
+
+            btnGuardar.disabled = true;
+            try {
+                if (modoEdicion) {
+                    await api('/api/parametros.php?id=' + encodeURIComponent(fId.value), {
+                        method: 'PUT',
+                        body:   payload
+                    });
+                    toast('Parámetro actualizado.');
+                } else {
+                    await api('/api/parametros.php', {
+                        method: 'POST',
+                        body:   payload
+                    });
+                    toast('Parámetro creado.');
+                }
+                cerrarFormModal();
+                await cargarLista();
+            } catch (err) {
+                showFormError(err.message);
+            } finally {
+                btnGuardar.disabled = false;
+            }
+        });
     }
 
     // -------- Chrome de la app --------------------------------------------

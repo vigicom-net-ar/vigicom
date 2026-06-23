@@ -7,11 +7,11 @@ name: vigicom
 services:
   db:
     image: mysql:8.0
-    container_name: vigicom-db
+    container_name: vigicom-mysql
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: vigicom-dev
+      MYSQL_DATABASE: vigicom_dev
     ports:
       - "3310:3306"
     volumes:
@@ -25,7 +25,7 @@ services:
   cloud:
     build:
       context: ./docker/php
-    container_name: vigicom-cloud
+    container_name: vigicom-apache
     restart: unless-stopped
     depends_on:
       db:
@@ -43,24 +43,9 @@ services:
       APP_URL: http://localhost:8090
       DB_HOST: db
       DB_PORT: "3306"
-      DB_NAME: vigicom-dev
+      DB_NAME: vigicom_dev
       DB_USER: root
       DB_PASS: root
-
-  phpmyadmin:
-    image: phpmyadmin:5
-    container_name: vigicom-pma
-    restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
-    ports:
-      - "8091:80"
-    environment:
-      PMA_HOST: db
-      PMA_USER: root
-      PMA_PASSWORD: root
-      UPLOAD_LIMIT: 64M
 
 volumes:
   vigicom_dbdata:

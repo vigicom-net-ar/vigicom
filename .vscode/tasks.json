@@ -2,13 +2,11 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Rebuild Local",
+            "label": "instalar",
             "type": "shell",
-            "command": "powershell.exe",
+            "command": "C:\\Program Files\\Git\\bin\\bash.exe",
             "args": [
-                "-NoProfile",
-                "-ExecutionPolicy", "Bypass",
-                "-File", "${workspaceFolder}/scripts/rebuild-local.ps1"
+                "scripts/instalar.sh"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"
@@ -20,8 +18,65 @@
                 "panel": "dedicated",
                 "clear": true
             },
-            "problemMatcher": [],
-            "detail": "Reconstruye el entorno Docker local de Vigicom (idempotente)."
+            "problemMatcher": []
+        },
+        {
+            "label": "aprovisionar",
+            "type": "shell",
+            "command": "C:\\Program Files\\Git\\bin\\bash.exe",
+            "args": [
+                "scripts/aprovisionar.sh"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": true,
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "deploy",
+            "type": "shell",
+            "command": "C:\\Program Files\\Git\\bin\\bash.exe",
+            "args": [
+                "scripts/deploy.sh"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": true,
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "deploy + rebuild",
+            "type": "shell",
+            "command": "C:\\Program Files\\Git\\bin\\bash.exe",
+            "args": [
+                "scripts/deploy.sh",
+                "--rebuild"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": true,
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
         }
     ]
 }

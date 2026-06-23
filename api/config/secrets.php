@@ -58,7 +58,7 @@ function _secret(string $key, string $default = ''): string
 define('APP_ENV',     $env);
 define('DB_HOST',     _secret('DB_HOST', '127.0.0.1'));
 define('DB_PORT',     _secret('DB_PORT', '3306'));
-define('DB_NAME',     _secret('DB_NAME', 'vigicom-dev'));
+define('DB_NAME',     _secret('DB_NAME', 'vigicom_dev'));
 define('DB_USER',     _secret('DB_USER', 'root'));
 define('DB_PASS',     _secret('DB_PASS', ''));
 define('DB_CHARSET',  _secret('DB_CHARSET', 'utf8mb4'));
