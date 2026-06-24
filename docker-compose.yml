@@ -67,39 +67,6 @@ services:
     entrypoint: ["/init.sh"]
     command: ["/opt/emqx/bin/emqx", "foreground"]
 
-  # Worker del backend: corre tres procesos administrados por supervisord
-  #   - apache: sirve los cronjobs PHP por HTTP -> http://localhost:8091/...
-  #   - cron  : ejecuta los mismos scripts segun horario
-  #   - motor : daemon Python (robot/motor/inicio.py) que escucha MQTT
-  # Logs combinados via `docker compose logs -f robot`.
-  robot:
-    build:
-      context: ./docker/robot
-    container_name: vigicom-robot
-    restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
-      emqx:
-        condition: service_started
-    ports:
-      - "8091:80"
-    volumes:
-      - ./robot:/var/www/robot
-      - ./api:/var/www/api
-      - ./db:/var/www/db
-      - ./.env.development:/var/www/.env.development
-      - ./.env.production:/var/www/.env.production
-    environment:
-      APP_ENV: dev
-      DB_HOST: db
-      DB_PORT: "3306"
-      DB_NAME: vigicom_dev
-      DB_USER: root
-      DB_PASS: root
-      MQTT_HOST: emqx
-      MQTT_PORT: "1883"
-
 volumes:
   vigicom_dbdata:
   vigicom_emqx_data:

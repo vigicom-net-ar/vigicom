@@ -19,18 +19,15 @@ set -eo pipefail
 
 APP_DIR="/opt/app/vigicom"
 APP_PORT_HOST=8090
-ROBOT_PORT_HOST=8091
 DOMAIN="${DOMAIN:-cloud.vigicom.net.ar}"
-ROBOT_DOMAIN="${ROBOT_DOMAIN:-robot.vigicom.net.ar}"
 CERTBOT_EMAIL="${CERTBOT_EMAIL:-javieralvarez@databox.net.ar}"
 COMPOSE_FILE="docker-compose.prod.yml"
 
 echo ""
 echo "============================================================"
 echo "  Setup remoto vigicom (Amazon Linux 2023)"
-echo "  Dominio cloud: ${DOMAIN}"
-echo "  Dominio robot: ${ROBOT_DOMAIN}"
-echo "  App dir:       ${APP_DIR}"
+echo "  Dominio: ${DOMAIN}"
+echo "  App dir: ${APP_DIR}"
 echo "============================================================"
 echo ""
 
@@ -67,7 +64,7 @@ echo "        OK -- Compose $(sudo docker compose version --short) / buildx $(su
 
 # ---- 4. Verificar artefactos transferidos ----
 echo "[ 4/9 ] Verificando archivos del proyecto..."
-for f in cloud docker/php/Dockerfile docker/robot/Dockerfile .env.production; do
+for f in cloud docker/php/Dockerfile .env.production; do
     if [ ! -e "$APP_DIR/$f" ]; then
         echo "        ERROR: falta $APP_DIR/$f"
         echo "        Re-correr scripts/aprovisionar.sh desde la maquina local."
@@ -88,11 +85,9 @@ echo "        OK"
 echo "[ 5/9 ] Generando $COMPOSE_FILE..."
 
 EXTRA_MOUNTS=""
-ROBOT_EXTRA_MOUNTS=""
 for d in api db; do
     if [ -d "$APP_DIR/$d" ]; then
         EXTRA_MOUNTS="${EXTRA_MOUNTS}      - ./${d}:/var/www/${d}"$'\n'
-        ROBOT_EXTRA_MOUNTS="${ROBOT_EXTRA_MOUNTS}      - ./${d}:/var/www/${d}"$'\n'
     fi
 done
 
@@ -136,39 +131,12 @@ ${EXTRA_MOUNTS}      - ./.env.production:/var/www/.env.production
     command: ["/opt/emqx/bin/emqx", "foreground"]
     restart: unless-stopped
 
-  # Worker del backend: apache (cronjobs HTTP) + cron + motor (daemon Python)
-  # via supervisord. La BD viene de .env.production (RDS), por eso no tiene
-  # depends_on de db (en prod no hay servicio db).
-  # Puerto 8091 bindeado solo a 127.0.0.1: Nginx proxea desde afuera (igual
-  # patron que cloud:8090).
-  robot:
-    container_name: vigicom-robot
-    build:
-      context: ./docker/robot
-      dockerfile: Dockerfile
-    depends_on:
-      - emqx
-    ports:
-      - "127.0.0.1:8091:80"
-    volumes:
-      - ./robot:/var/www/robot
-${ROBOT_EXTRA_MOUNTS}      - ./.env.production:/var/www/.env.production
-    env_file:
-      - .env.production
-    environment:
-      MQTT_HOST: emqx
-      MQTT_PORT: "1883"
-    restart: unless-stopped
-
 volumes:
   vigicom_emqx_data:
 EOF
 echo "        OK"
 
 # ---- 6. Configurar Nginx ----
-# Dos server blocks:
-#   - DOMAIN (cloud)       -> 127.0.0.1:APP_PORT_HOST (vigicom-apache)
-#   - ROBOT_DOMAIN (robot) -> 127.0.0.1:ROBOT_PORT_HOST (vigicom-robot)
 echo "[ 6/9 ] Configurando Nginx como reverse proxy..."
 sudo tee /etc/nginx/conf.d/vigicom.conf > /dev/null << NGX
 # Reverse proxy vigicom -- generado por aprovisionar_server.sh
@@ -183,21 +151,6 @@ server {
         proxy_set_header   X-Forwarded-Proto \$scheme;
         client_max_body_size 50M;
         proxy_read_timeout 120s;
-    }
-}
-
-server {
-    listen 80;
-    server_name ${ROBOT_DOMAIN};
-    location / {
-        proxy_pass         http://127.0.0.1:${ROBOT_PORT_HOST};
-        proxy_set_header   Host \$host;
-        proxy_set_header   X-Real-IP \$remote_addr;
-        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header   X-Forwarded-Proto \$scheme;
-        client_max_body_size 50M;
-        # Algunos cronjobs son largos: dar margen amplio.
-        proxy_read_timeout 600s;
     }
 }
 NGX
@@ -241,27 +194,14 @@ if [ -z "$PUBLIC_IP" ]; then
 else
     echo "        IP publica del servidor: $PUBLIC_IP"
 
-    # Chequear DNS de cada dominio y armar la lista de -d para certbot solo
-    # con los que ya apuntan al server. Si alguno no resuelve, se avisa pero
-    # no se aborta: los que si resuelven igual obtienen su cert.
-    CERT_DOMAINS=""
-    for d in "$DOMAIN" "$ROBOT_DOMAIN"; do
-        RESOLVED=$(dig +short A "$d" @8.8.8.8 | tail -n1)
-        if [ "$RESOLVED" = "$PUBLIC_IP" ]; then
-            CERT_DOMAINS="$CERT_DOMAINS -d $d"
-            echo "        DNS OK: $d -> $RESOLVED"
-        else
-            echo "        DNS aun no apunta al servidor:"
-            echo "          $d -> ${RESOLVED:-(no resuelve)} (esperado $PUBLIC_IP)"
-        fi
-    done
-
-    if [ -z "$CERT_DOMAINS" ]; then
+    RESOLVED=$(dig +short A "$DOMAIN" @8.8.8.8 | tail -n1)
+    if [ "$RESOLVED" != "$PUBLIC_IP" ]; then
+        echo "        DNS aun no apunta al servidor:"
+        echo "          $DOMAIN -> ${RESOLVED:-(no resuelve)} (esperado $PUBLIC_IP)"
         echo ""
-        echo "        Ningun dominio resuelve al server -- configurar DNS y volver"
-        echo "        a correr este script para SSL."
+        echo "        Configurar DNS y volver a correr este script para SSL."
     else
-        echo "        Verificando certbot..."
+        echo "        DNS OK. Verificando certbot..."
 
         if [ ! -x /opt/certbot/bin/certbot ]; then
             echo "        Instalando certbot en /opt/certbot..."
@@ -272,14 +212,14 @@ else
         fi
         echo "        certbot $(/usr/bin/certbot --version 2>&1 | awk '{print $2}')"
 
-        echo "        Emitiendo/verificando certificado(s) para:$CERT_DOMAINS"
+        echo "        Emitiendo/verificando certificado para $DOMAIN..."
         if sudo certbot --nginx \
                 --non-interactive \
                 --agree-tos \
                 --email "$CERTBOT_EMAIL" \
                 --redirect \
                 --keep-until-expiring \
-                $CERT_DOMAINS; then
+                -d "$DOMAIN"; then
             echo "        OK -- SSL configurado."
         else
             echo "        AVISO: certbot fallo. Revisar /var/log/letsencrypt/letsencrypt.log"
@@ -297,12 +237,10 @@ echo ""
 echo "============================================================"
 echo "  Setup remoto completo."
 echo ""
-echo "  App:        https://${DOMAIN}/         (proxy a 127.0.0.1:${APP_PORT_HOST})"
-echo "  Robot:      https://${ROBOT_DOMAIN}/   (proxy a 127.0.0.1:${ROBOT_PORT_HOST})"
+echo "  App:        https://${DOMAIN}/   (proxy a 127.0.0.1:${APP_PORT_HOST})"
 echo "  Repo:       $APP_DIR"
 echo "  Compose:    docker compose -f $APP_DIR/$COMPOSE_FILE <cmd>"
-echo "  Logs cloud: sudo docker logs -f vigicom-apache"
-echo "  Logs robot: sudo docker logs -f vigicom-robot"
+echo "  Logs:       sudo docker logs -f vigicom-apache"
 echo "  Restart:    cd $APP_DIR && sudo docker compose -f $COMPOSE_FILE restart"
 echo "  Ver SSL:    sudo certbot certificates"
 echo "============================================================"

@@ -1,4 +1,0 @@
-# Dependencias Python del motor. Agregar las que necesite tu inicio.py.
-# Despues de editar, rebuild: docker compose up -d --build robot
-paho-mqtt
-tendo

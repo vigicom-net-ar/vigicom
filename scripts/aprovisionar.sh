@@ -26,7 +26,6 @@ KEY="/c/Users/Javier/OneDrive/Temp/Llaves/vigicom/vigicom.pem"
 BASE_LOCAL="$(cd "$(dirname "$0")/.." && pwd)"
 BASE_REMOTE="/opt/app/vigicom"
 DOMAIN="cloud.vigicom.net.ar"
-ROBOT_DOMAIN="robot.vigicom.net.ar"
 CERTBOT_EMAIL="${CERTBOT_EMAIL:-javieralvarez@databox.net.ar}"
 
 echo ""
@@ -34,13 +33,12 @@ echo "============================================================"
 echo "  Aprovisionamiento servidor vigicom"
 echo "  Host:   $HOST"
 echo "  Dest:   $BASE_REMOTE"
-echo "  Cloud:  https://${DOMAIN}/"
-echo "  Robot:  https://${ROBOT_DOMAIN}/"
+echo "  URL:    https://${DOMAIN}/"
 echo "============================================================"
 echo ""
 
 # ---- 1. Validar artefactos locales ----
-for f in .env.production docker/php/Dockerfile docker/robot/Dockerfile cloud scripts/aprovisionar_server.sh; do
+for f in .env.production docker/php/Dockerfile cloud scripts/aprovisionar_server.sh; do
     if [ ! -e "$BASE_LOCAL/$f" ]; then
         echo "ERROR: falta $BASE_LOCAL/$f"
         exit 1
@@ -63,8 +61,6 @@ echo ""
 # Se incluye scripts/ para que aprovisionar_server.sh quede disponible en el
 # server. .env.production tambien (esta en .gitignore, no llega por otra via).
 # db/ es la fuente de verdad del schema (declarado en CLAUDE.md raiz).
-# robot/ contiene los cronjobs PHP y el motor Python que corren en el
-# contenedor vigicom-robot (ver docker/robot/).
 # api/, app/, www/ son componentes hermanos: se incluyen si existen para
 # que el server quede listo cuando cada uno entre en produccion.
 #
@@ -75,11 +71,11 @@ echo ""
 #       carpeta (acota el alcance, evita tocar otras carpetas del server)
 #   (4) en remoto: limpiar staging
 # rsync vive en el server (Amazon Linux lo trae por default).
-echo "  Sincronizando cloud/, docker/, db/, robot/, api/, app/, www/, scripts/, .env.production (mirror con --delete)..."
+echo "  Sincronizando cloud/, docker/, db/, api/, app/, www/, scripts/, .env.production (mirror con --delete)..."
 cd "$BASE_LOCAL"
 
 EXTRA_DIRS=""
-for d in db robot api app www; do
+for d in db api app www; do
     if [ -d "$BASE_LOCAL/$d" ]; then
         EXTRA_DIRS="$EXTRA_DIRS $d"
     fi
@@ -122,12 +118,10 @@ echo "  Ejecutando setup en el server..."
 echo ""
 ssh -i "$KEY" -o StrictHostKeyChecking=no -t \
     "$USER@$HOST" \
-    "DOMAIN='$DOMAIN' ROBOT_DOMAIN='$ROBOT_DOMAIN' CERTBOT_EMAIL='$CERTBOT_EMAIL' bash '$BASE_REMOTE/scripts/aprovisionar_server.sh'"
+    "DOMAIN='$DOMAIN' CERTBOT_EMAIL='$CERTBOT_EMAIL' bash '$BASE_REMOTE/scripts/aprovisionar_server.sh'"
 
 echo ""
 echo "============================================================"
-echo "  Aprovisionamiento completo:"
-echo "    Cloud: https://${DOMAIN}/"
-echo "    Robot: https://${ROBOT_DOMAIN}/"
+echo "  Aprovisionamiento completo -- https://${DOMAIN}/"
 echo "============================================================"
 echo ""
