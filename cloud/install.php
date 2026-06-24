@@ -15,15 +15,26 @@ $pasos = [];
 try {
     $pdo = db();
 
-    $sql = file_get_contents(dirname(__DIR__) . '/db/schema.sql');
-    $sql = preg_replace('/CREATE DATABASE[^;]+;/i', '', $sql);
-    $sql = preg_replace('/USE[^;]+;/i', '', $sql);
+    // El schema vive en db/schema.sql y arranca con DROP TABLE IF EXISTS por
+    // cada tabla, asi que reaplicarlo destruye todo lo cargado. Regla estricta:
+    // SOLO aplicar el schema si la DB no tiene NINGUNA tabla. Si ya hay
+    // cualquier tabla (aunque sea una sola), no se toca: la unica via para
+    // partir de cero es borrar el volumen (`scripts/instalar.sh --reset-data`).
+    $tablas = (int) $pdo->query('SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE()')->fetchColumn();
 
-    foreach (array_filter(array_map('trim', explode(';', $sql))) as $stmt) {
-        if ($stmt === '') continue;
-        $pdo->exec($stmt);
+    if ($tablas === 0) {
+        $sql = file_get_contents(dirname(__DIR__) . '/db/schema.sql');
+        $sql = preg_replace('/CREATE DATABASE[^;]+;/i', '', $sql);
+        $sql = preg_replace('/USE[^;]+;/i', '', $sql);
+
+        foreach (array_filter(array_map('trim', explode(';', $sql))) as $stmt) {
+            if ($stmt === '') continue;
+            $pdo->exec($stmt);
+        }
+        $pasos[] = 'Esquema aplicado (DB virgen, 0 tablas).';
+    } else {
+        $pasos[] = "Esquema NO se toca (DB ya tiene {$tablas} tablas).";
     }
-    $pasos[] = 'Esquema aplicado.';
 
     $correo = 'admin@vigicom.net.ar';
     $pass   = 'admin123';

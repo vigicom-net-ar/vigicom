@@ -1,6 +1,35 @@
-# URLs sin extension: /foo sirve foo.php cuando existe.
+# Vigicom Panel - Apache rewrite + seguridad basica
+
 RewriteEngine On
+
+# DirectoryIndex
+DirectoryIndex index.php
+
+# URLs sin extension: /foo sirve foo.php cuando existe.
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
 RewriteCond %{REQUEST_FILENAME}\.php -f
 RewriteRule ^(.+?)/?$ $1.php [L]
+
+# Bloquear acceso directo a carpetas sensibles
+RewriteRule ^(config|includes|sql|lib)(/|$) - [F,L]
+
+# Bloquear archivos sensibles
+<FilesMatch "(^\.|\.sql$|\.md$|composer\.(json|lock)|\.env)">
+    Require all denied
+</FilesMatch>
+
+# Headers de seguridad
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-Frame-Options "SAMEORIGIN"
+    Header set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>
+
+# Cache estaticos
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType text/css "access plus 7 days"
+    ExpiresByType application/javascript "access plus 7 days"
+    ExpiresByType image/svg+xml "access plus 30 days"
+</IfModule>
