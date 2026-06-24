@@ -39,23 +39,25 @@ echo "  version.txt actualizado en cloud/"
 echo ""
 
 # ---- 2. Verificar artefactos requeridos ----
-for f in .env.production docker/php/Dockerfile cloud; do
+for f in .env.production docker/php/Dockerfile docker/robot/Dockerfile cloud; do
     if [ ! -e "$BASE_LOCAL/$f" ]; then
         echo "ERROR: falta $BASE_LOCAL/$f"
         exit 1
     fi
 done
 
-# ---- 3. Subir cloud/, docker/, db/, api/, app/, www/, .env.production ----
+# ---- 3. Subir cloud/, docker/, db/, robot/, api/, app/, www/, .env.production ----
 # NO subimos docker-compose.yml: en el servidor vive docker-compose.prod.yml,
 # generado por aprovisionar_server.sh (sin servicio db).
 # .env.production se sube en cada deploy para mantener prod en sync.
-# db/, api/, app/, www/ se incluyen si existen (componentes hermanos del repo).
-echo "  Subiendo cloud/, docker/, db/, api/, app/, www/ y .env.production (mirror con --delete)..."
+# db/, robot/, api/, app/, www/ se incluyen si existen (componentes hermanos
+# del repo). robot/ contiene los cronjobs PHP y el motor Python que corren en
+# el contenedor vigicom-robot.
+echo "  Subiendo cloud/, docker/, db/, robot/, api/, app/, www/ y .env.production (mirror con --delete)..."
 cd "$BASE_LOCAL"
 
 EXTRA_DIRS=""
-for d in db api app www; do
+for d in db robot api app www; do
     if [ -d "$BASE_LOCAL/$d" ]; then
         EXTRA_DIRS="$EXTRA_DIRS $d"
     fi
