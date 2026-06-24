@@ -47,5 +47,26 @@ services:
       DB_USER: root
       DB_PASS: root
 
+  emqx:
+    image: emqx/emqx:5.8
+    container_name: vigicom-emqx
+    restart: unless-stopped
+    ports:
+      - "1883:1883"     # MQTT dev (en prod el compose generado mapea 16273:1883)
+      - "18083:18083"   # dashboard (filtrado por IP en el security group)
+    env_file:
+      - .env.development
+    environment:
+      EMQX_ALLOW_ANONYMOUS: "false"
+      EMQX_AUTHENTICATION__1__MECHANISM: password_based
+      EMQX_AUTHENTICATION__1__BACKEND: built_in_database
+      EMQX_AUTHENTICATION__1__USER_ID_TYPE: username
+    volumes:
+      - vigicom_emqx_data:/opt/emqx/data
+      - ./docker/emqx/init.sh:/init.sh:ro
+    entrypoint: ["/init.sh"]
+    command: ["/opt/emqx/bin/emqx", "foreground"]
+
 volumes:
   vigicom_dbdata:
+  vigicom_emqx_data:

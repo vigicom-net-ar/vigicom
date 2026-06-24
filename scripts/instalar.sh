@@ -183,6 +183,17 @@ if ! $NO_INSTALL; then
     fi
 fi
 
+# --- Sembrar usuario MQTT en EMQX (idempotente, via API) --------------------
+# EMQX expone su dashboard API en localhost:18083 (mapeado por compose).
+# El seeder hace POST -> si 409, PUT, asi que se puede reaplicar siempre.
+echo ""
+echo -e "${RED}==> Sembrando usuario MQTT en EMQX${NC}"
+if bash "$REPO_ROOT/scripts/lib/emqx_seed.sh" "$REPO_ROOT/.env.development"; then
+    :
+else
+    echo -e "${YELLOW}    AVISO: el seeder de EMQX fallo -- revisa logs con: docker logs vigicom-emqx${NC}"
+fi
+
 # --- Resumen ----------------------------------------------------------------
 echo ""
 if $app_ok; then
