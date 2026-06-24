@@ -6,7 +6,9 @@
  *  - jwt_sign(array $payload, ?int $ttl): string
  *  - jwt_verify(string $token): ?array  (devuelve payload o null si inválido/expirado)
  *
- * Firma con APP_KEY (definido por api/config/secrets.php).
+ * Firma con APP_KEY_CLOUD (definido por env.php en raíz del repo).
+ * Cada app del repo tiene su propia APP_KEY_<NOMBRE> para aislar sesiones:
+ * un leak en otra app no compromete los JWT de cloud.
  */
 
 function _jwt_b64url_encode(string $bin): string
@@ -38,7 +40,7 @@ function jwt_sign(array $payload, ?int $ttlSeconds = 60 * 60 * 12): string
     $segHead = _jwt_b64url_encode(json_encode($header,  JSON_UNESCAPED_SLASHES));
     $segLoad = _jwt_b64url_encode(json_encode($payload, JSON_UNESCAPED_SLASHES));
     $signing = $segHead . '.' . $segLoad;
-    $sig     = hash_hmac('sha256', $signing, APP_KEY, true);
+    $sig     = hash_hmac('sha256', $signing, APP_KEY_CLOUD, true);
 
     return $signing . '.' . _jwt_b64url_encode($sig);
 }
@@ -51,7 +53,7 @@ function jwt_verify(string $token): ?array
     }
     [$segHead, $segLoad, $segSig] = $parts;
 
-    $expected = hash_hmac('sha256', $segHead . '.' . $segLoad, APP_KEY, true);
+    $expected = hash_hmac('sha256', $segHead . '.' . $segLoad, APP_KEY_CLOUD, true);
     $sig      = _jwt_b64url_decode($segSig);
     if (!hash_equals($expected, $sig)) {
         return null;

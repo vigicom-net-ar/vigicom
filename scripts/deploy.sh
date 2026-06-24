@@ -39,23 +39,25 @@ echo "  version.txt actualizado en cloud/"
 echo ""
 
 # ---- 2. Verificar artefactos requeridos ----
-for f in .env.production docker/php/Dockerfile cloud; do
+for f in .env.production env.php docker/php/Dockerfile cloud; do
     if [ ! -e "$BASE_LOCAL/$f" ]; then
         echo "ERROR: falta $BASE_LOCAL/$f"
         exit 1
     fi
 done
 
-# ---- 3. Subir cloud/, docker/, db/, api/, app/, www/, .env.production ----
+# ---- 3. Subir cloud/, docker/, db/, api/, robot/, app/, www/, panel/, .env.production ----
 # NO subimos docker-compose.yml: en el servidor vive docker-compose.prod.yml,
 # generado por aprovisionar_server.sh (sin servicio db).
 # .env.production se sube en cada deploy para mantener prod en sync.
-# db/, api/, app/, www/ se incluyen si existen (componentes hermanos del repo).
-echo "  Subiendo cloud/, docker/, db/, api/, app/, www/ y .env.production (mirror con --delete)..."
+# db/, api/, robot/, app/, www/, panel/ se incluyen si existen (componentes
+# hermanos del repo). Cada uno es el docroot del vhost homonimo en
+# vigicom-apache.
+echo "  Subiendo cloud/, docker/, db/, api/, robot/, app/, www/, panel/ y .env.production (mirror con --delete)..."
 cd "$BASE_LOCAL"
 
 EXTRA_DIRS=""
-for d in db api app www; do
+for d in db api robot app www panel; do
     if [ -d "$BASE_LOCAL/$d" ]; then
         EXTRA_DIRS="$EXTRA_DIRS $d"
     fi
@@ -80,7 +82,7 @@ tar \
     --exclude='*.log' \
     --exclude='*.pem' \
     --exclude='*.key' \
-    -czf - cloud docker $EXTRA_DIRS .env.production | \
+    -czf - cloud docker $EXTRA_DIRS env.php .env.production | \
 ssh -i "$KEY" -o StrictHostKeyChecking=no \
     "$USER@$HOST" "
         set -e
@@ -91,6 +93,9 @@ ssh -i "$KEY" -o StrictHostKeyChecking=no \
                 rsync -a --delete \"$STAGING/\$dir/\" \"$BASE_REMOTE/\$dir/\"
             fi
         done
+        if [ -f '$STAGING/env.php' ]; then
+            cp -f '$STAGING/env.php' '$BASE_REMOTE/env.php'
+        fi
         if [ -f '$STAGING/.env.production' ]; then
             cp -f '$STAGING/.env.production' '$BASE_REMOTE/.env.production'
         fi

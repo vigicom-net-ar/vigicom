@@ -10,7 +10,7 @@ Para detalles de stack y arquitectura ver [STACK.md](STACK.md); para el sistema 
 - MySQL 8.0 / MariaDB.
 - HTML + CSS + JS vanilla. Un único `assets/css/app.css` y un único `assets/js/app.js`.
 - Sin build step, sin npm, sin frameworks.
-- Auth: JWT HS256 firmado con `APP_KEY`, cookie `vigicom_token` (HttpOnly).
+- Auth: JWT HS256 firmado con `APP_KEY_CLOUD`, cookie `vigicom_token` (HttpOnly).
 
 ## Estructura
 
@@ -62,7 +62,7 @@ Todo lo demás pasa por `/api/*.php`.
    ```sql
    CREATE DATABASE vigicom_dev CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
    ```
-2. Variables de entorno en `.env.development` (en la raíz del repo): `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASS`, `APP_KEY`.
+2. Variables de entorno en `.env.development` (en la raíz del repo): `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASS`, `DB_CHARSET`, `APP_KEY_CLOUD`.
 3. Levantar el contenedor Docker (puerto 8086) o apuntar un vhost local al directorio `cloud/`.
 4. Abrir `http://localhost:8086/install.php` para aplicar el esquema y crear el admin inicial.
 5. **Borrar `install.php`.**

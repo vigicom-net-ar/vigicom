@@ -31,11 +31,21 @@ services:
       db:
         condition: service_healthy
     ports:
-      - "8090:80"
+      - "8090:8090"   # cloud  -> /var/www/cloud
+      - "8104:8104"   # api    -> /var/www/api
+      - "8105:8105"   # robot  -> /var/www/robot
+      - "8106:8106"   # www    -> /var/www/www
+      - "8107:8107"   # app    -> /var/www/app
+      - "8108:8108"   # panel  -> /var/www/panel
     volumes:
-      - ./cloud:/var/www/html
+      - ./cloud:/var/www/cloud
       - ./api:/var/www/api
+      - ./robot:/var/www/robot
+      - ./www:/var/www/www
+      - ./app:/var/www/app
+      - ./panel:/var/www/panel
       - ./db:/var/www/db
+      - ./env.php:/var/www/env.php
       - ./.env.development:/var/www/.env.development
       - ./.env.production:/var/www/.env.production
     environment:

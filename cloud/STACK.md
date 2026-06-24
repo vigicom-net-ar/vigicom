@@ -106,14 +106,14 @@ dentro de `app.js`.
 ## 6. Variables de entorno
 
 Cloud **no** lee variables de entorno por su cuenta. Las consume a
-través de `api/config/secrets.php` (en la raíz del repositorio padre),
+través de `env.php` (en la raíz del repositorio padre),
 que carga `.env.development` o `.env.production` según `APP_ENV`.
 
 `APP_ENV` lo setea el contenedor Docker:
 - En desarrollo: `APP_ENV=development` → lee `.env.development` (MySQL local en Docker, base `vigicom_dev`).
 - En producción: `APP_ENV=production` → lee `.env.production` (RDS, base `vigicom`).
 
-Constantes que cloud usa habitualmente (definidas por `secrets.php`):
+Constantes que cloud usa habitualmente (definidas por `env.php`):
 `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASS`, `DB_CHARSET`,
 `MEDIA_BASE_URL`, `S3_BUCKET`.
 

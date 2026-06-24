@@ -18,16 +18,40 @@
 set -eo pipefail
 
 APP_DIR="/opt/app/vigicom"
-APP_PORT_HOST=8090
+
+# Un puerto por vhost. Mismo numero adentro y afuera del contenedor (compose
+# los mapea 1:1) y mismo numero en dev y en prod. Coordinado con
+# docker/php/ports.conf y docker/php/vhosts.conf.
+CLOUD_PORT_HOST=8090
+API_PORT_HOST=8104
+ROBOT_PORT_HOST=8105
+WWW_PORT_HOST=8106
+APP_PORT_HOST=8107
+PANEL_PORT_HOST=8108
+
 DOMAIN="${DOMAIN:-cloud.vigicom.net.ar}"
+API_DOMAIN="${API_DOMAIN:-api.vigicom.net.ar}"
+ROBOT_DOMAIN="${ROBOT_DOMAIN:-robot.vigicom.net.ar}"
+WWW_DOMAIN="${WWW_DOMAIN:-www.vigicom.net.ar}"
+APP_DOMAIN="${APP_DOMAIN:-app.vigicom.net.ar}"
+PANEL_DOMAIN="${PANEL_DOMAIN:-panel.vigicom.net.ar}"
 CERTBOT_EMAIL="${CERTBOT_EMAIL:-javieralvarez@databox.net.ar}"
 COMPOSE_FILE="docker-compose.prod.yml"
+
+# Dominios que SI piden cert SSL en este server. api, www y app estan en otra
+# infra de prod por ahora; cuando se migren se agregan a esta lista.
+SSL_DOMAINS=("$DOMAIN" "$ROBOT_DOMAIN" "$PANEL_DOMAIN")
 
 echo ""
 echo "============================================================"
 echo "  Setup remoto vigicom (Amazon Linux 2023)"
-echo "  Dominio: ${DOMAIN}"
-echo "  App dir: ${APP_DIR}"
+echo "  Dominio cloud: ${DOMAIN}"
+echo "  Dominio api:   ${API_DOMAIN}    (sin SSL: ya esta en otra infra)"
+echo "  Dominio robot: ${ROBOT_DOMAIN}"
+echo "  Dominio www:   ${WWW_DOMAIN}    (sin SSL: ya esta en otra infra)"
+echo "  Dominio app:   ${APP_DOMAIN}    (sin SSL: ya esta en otra infra)"
+echo "  Dominio panel: ${PANEL_DOMAIN}"
+echo "  App dir:       ${APP_DIR}"
 echo "============================================================"
 echo ""
 
@@ -64,7 +88,7 @@ echo "        OK -- Compose $(sudo docker compose version --short) / buildx $(su
 
 # ---- 4. Verificar artefactos transferidos ----
 echo "[ 4/9 ] Verificando archivos del proyecto..."
-for f in cloud docker/php/Dockerfile .env.production; do
+for f in cloud docker/php/Dockerfile env.php .env.production; do
     if [ ! -e "$APP_DIR/$f" ]; then
         echo "        ERROR: falta $APP_DIR/$f"
         echo "        Re-correr scripts/aprovisionar.sh desde la maquina local."
@@ -85,7 +109,7 @@ echo "        OK"
 echo "[ 5/9 ] Generando $COMPOSE_FILE..."
 
 EXTRA_MOUNTS=""
-for d in api db; do
+for d in api robot www app panel db; do
     if [ -d "$APP_DIR/$d" ]; then
         EXTRA_MOUNTS="${EXTRA_MOUNTS}      - ./${d}:/var/www/${d}"$'\n'
     fi
@@ -103,10 +127,16 @@ services:
       context: ./docker/php
       dockerfile: Dockerfile
     ports:
-      - "127.0.0.1:${APP_PORT_HOST}:80"
+      - "127.0.0.1:${CLOUD_PORT_HOST}:${CLOUD_PORT_HOST}"
+      - "127.0.0.1:${API_PORT_HOST}:${API_PORT_HOST}"
+      - "127.0.0.1:${ROBOT_PORT_HOST}:${ROBOT_PORT_HOST}"
+      - "127.0.0.1:${WWW_PORT_HOST}:${WWW_PORT_HOST}"
+      - "127.0.0.1:${APP_PORT_HOST}:${APP_PORT_HOST}"
+      - "127.0.0.1:${PANEL_PORT_HOST}:${PANEL_PORT_HOST}"
     volumes:
-      - ./cloud:/var/www/html
-${EXTRA_MOUNTS}      - ./.env.production:/var/www/.env.production
+      - ./cloud:/var/www/cloud
+${EXTRA_MOUNTS}      - ./env.php:/var/www/env.php
+      - ./.env.production:/var/www/.env.production
     env_file:
       - .env.production
     restart: unless-stopped
@@ -137,6 +167,10 @@ EOF
 echo "        OK"
 
 # ---- 6. Configurar Nginx ----
+# Cinco server blocks: cada subdominio proxea al puerto local que escucha el
+# vhost de Apache correspondiente. El Host header se preserva por costumbre
+# (Apache no lo necesita porque la routing interna es por puerto, no por
+# ServerName).
 echo "[ 6/9 ] Configurando Nginx como reverse proxy..."
 sudo tee /etc/nginx/conf.d/vigicom.conf > /dev/null << NGX
 # Reverse proxy vigicom -- generado por aprovisionar_server.sh
@@ -144,7 +178,77 @@ server {
     listen 80;
     server_name ${DOMAIN};
     location / {
+        proxy_pass         http://127.0.0.1:${CLOUD_PORT_HOST};
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto \$scheme;
+        client_max_body_size 50M;
+        proxy_read_timeout 120s;
+    }
+}
+
+server {
+    listen 80;
+    server_name ${API_DOMAIN};
+    location / {
+        proxy_pass         http://127.0.0.1:${API_PORT_HOST};
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto \$scheme;
+        client_max_body_size 50M;
+        proxy_read_timeout 120s;
+    }
+}
+
+server {
+    listen 80;
+    server_name ${ROBOT_DOMAIN};
+    location / {
+        proxy_pass         http://127.0.0.1:${ROBOT_PORT_HOST};
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto \$scheme;
+        client_max_body_size 50M;
+        proxy_read_timeout 120s;
+    }
+}
+
+server {
+    listen 80;
+    server_name ${WWW_DOMAIN};
+    location / {
+        proxy_pass         http://127.0.0.1:${WWW_PORT_HOST};
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto \$scheme;
+        client_max_body_size 50M;
+        proxy_read_timeout 120s;
+    }
+}
+
+server {
+    listen 80;
+    server_name ${APP_DOMAIN};
+    location / {
         proxy_pass         http://127.0.0.1:${APP_PORT_HOST};
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto \$scheme;
+        client_max_body_size 50M;
+        proxy_read_timeout 120s;
+    }
+}
+
+server {
+    listen 80;
+    server_name ${PANEL_DOMAIN};
+    location / {
+        proxy_pass         http://127.0.0.1:${PANEL_PORT_HOST};
         proxy_set_header   Host \$host;
         proxy_set_header   X-Real-IP \$remote_addr;
         proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -181,63 +285,56 @@ else
     echo "        AVISO: el seeder de EMQX fallo -- revisar: sudo docker logs vigicom-emqx"
 fi
 
-# ---- 9. Emitir certificado SSL ----
-echo "[ 9/9 ] Verificando DNS para SSL..."
+# ---- 9. Emitir/reinstalar certificados SSL ----
+# El paso 6 regenera vigicom.conf con solo "listen 80", asi que cada corrida
+# rompe las modificaciones que certbot habia hecho antes (listen 443, ssl,
+# redirect). Por eso aca llamamos certbot --nginx con --reinstall por cada
+# dominio: si el cert existe lo reinstala (reaplica nginx), si no existe lo
+# emite y lo instala. Si DNS no apunta o falla la validacion HTTP-01,
+# certbot reporta el error pero seguimos con el resto -- no aborta el script.
+echo "[ 9/9 ] Configurando SSL via certbot..."
 
-IMDS_TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
-    -H "X-aws-ec2-metadata-token-ttl-seconds: 60" --max-time 3 || echo "")
-PUBLIC_IP=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
-    --max-time 3 http://169.254.169.254/latest/meta-data/public-ipv4 || echo "")
+if [ ! -x /opt/certbot/bin/certbot ]; then
+    echo "        Instalando certbot en /opt/certbot..."
+    sudo python3 -m venv /opt/certbot
+    sudo /opt/certbot/bin/pip install --quiet --upgrade pip
+    sudo /opt/certbot/bin/pip install --quiet certbot certbot-nginx
+    sudo ln -sf /opt/certbot/bin/certbot /usr/bin/certbot
+fi
+echo "        certbot $(/usr/bin/certbot --version 2>&1 | awk '{print $2}')"
 
-if [ -z "$PUBLIC_IP" ]; then
-    echo "        AVISO: no se pudo detectar la IP publica -- saltando SSL."
-else
-    echo "        IP publica del servidor: $PUBLIC_IP"
-
-    RESOLVED=$(dig +short A "$DOMAIN" @8.8.8.8 | tail -n1)
-    if [ "$RESOLVED" != "$PUBLIC_IP" ]; then
-        echo "        DNS aun no apunta al servidor:"
-        echo "          $DOMAIN -> ${RESOLVED:-(no resuelve)} (esperado $PUBLIC_IP)"
-        echo ""
-        echo "        Configurar DNS y volver a correr este script para SSL."
+for d in "${SSL_DOMAINS[@]}"; do
+    echo "        --- $d ---"
+    if sudo certbot --nginx \
+            --non-interactive \
+            --agree-tos \
+            --email "$CERTBOT_EMAIL" \
+            --redirect \
+            --reinstall \
+            -d "$d" 2>&1 | tail -5; then
+        echo "        OK -- $d"
     else
-        echo "        DNS OK. Verificando certbot..."
-
-        if [ ! -x /opt/certbot/bin/certbot ]; then
-            echo "        Instalando certbot en /opt/certbot..."
-            sudo python3 -m venv /opt/certbot
-            sudo /opt/certbot/bin/pip install --quiet --upgrade pip
-            sudo /opt/certbot/bin/pip install --quiet certbot certbot-nginx
-            sudo ln -sf /opt/certbot/bin/certbot /usr/bin/certbot
-        fi
-        echo "        certbot $(/usr/bin/certbot --version 2>&1 | awk '{print $2}')"
-
-        echo "        Emitiendo/verificando certificado para $DOMAIN..."
-        if sudo certbot --nginx \
-                --non-interactive \
-                --agree-tos \
-                --email "$CERTBOT_EMAIL" \
-                --redirect \
-                --keep-until-expiring \
-                -d "$DOMAIN"; then
-            echo "        OK -- SSL configurado."
-        else
-            echo "        AVISO: certbot fallo. Revisar /var/log/letsencrypt/letsencrypt.log"
-        fi
-
-        if [ ! -f /etc/cron.d/certbot ]; then
-            echo "0 0,12 * * * root /opt/certbot/bin/python -c 'import random; import time; time.sleep(random.random() * 3600)' && /usr/bin/certbot renew -q" \
-                | sudo tee /etc/cron.d/certbot > /dev/null
-            echo "        Cron de renovacion creado en /etc/cron.d/certbot"
-        fi
+        echo "        AVISO: certbot fallo para $d (DNS, rate limit, validacion). Revisar /var/log/letsencrypt/letsencrypt.log"
     fi
+done
+
+if [ ! -f /etc/cron.d/certbot ]; then
+    echo "0 0,12 * * * root /opt/certbot/bin/python -c 'import random; import time; time.sleep(random.random() * 3600)' && /usr/bin/certbot renew -q" \
+        | sudo tee /etc/cron.d/certbot > /dev/null
+    echo "        Cron de renovacion creado en /etc/cron.d/certbot"
 fi
 
 echo ""
 echo "============================================================"
 echo "  Setup remoto completo."
 echo ""
-echo "  App:        https://${DOMAIN}/   (proxy a 127.0.0.1:${APP_PORT_HOST})"
+echo "  Cloud:      https://${DOMAIN}/    -> 127.0.0.1:${CLOUD_PORT_HOST}"
+echo "  Robot:      https://${ROBOT_DOMAIN}/  -> 127.0.0.1:${ROBOT_PORT_HOST}"
+echo "  Panel:      https://${PANEL_DOMAIN}/  -> 127.0.0.1:${PANEL_PORT_HOST}"
+echo "  Api:        http://${API_DOMAIN}/     -> 127.0.0.1:${API_PORT_HOST}   (sin SSL: ya esta en otra infra)"
+echo "  Www:        http://${WWW_DOMAIN}/     -> 127.0.0.1:${WWW_PORT_HOST}   (sin SSL: ya esta en otra infra)"
+echo "  App:        http://${APP_DOMAIN}/     -> 127.0.0.1:${APP_PORT_HOST}   (sin SSL: ya esta en otra infra)"
+echo ""
 echo "  Repo:       $APP_DIR"
 echo "  Compose:    docker compose -f $APP_DIR/$COMPOSE_FILE <cmd>"
 echo "  Logs:       sudo docker logs -f vigicom-apache"

@@ -3,7 +3,7 @@
  * Arranque común de todos los endpoints de cloud/api.
  *
  * Carga (en orden):
- *   1. Secretos compartidos del repo (.env -> constantes DB_*, APP_KEY, APP_ENV).
+ *   1. Secretos compartidos del repo (.env -> constantes DB_*, APP_KEY_CLOUD, APP_ENV).
  *   2. Conexión PDO + getConfigValue.
  *   3. Guard de autenticación (JWT cookie).
  *
@@ -11,7 +11,7 @@
  * Endpoints públicos (login, version) NO llaman requireAuth.
  */
 
-require_once dirname(__DIR__, 2) . '/api/config/secrets.php';
+require_once dirname(__DIR__, 2) . '/env.php';
 require_once __DIR__ . '/config/db.php';
 require_once dirname(__DIR__) . '/lib/auth_check.php';
 
