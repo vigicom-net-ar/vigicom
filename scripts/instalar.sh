@@ -94,7 +94,7 @@ echo -e "${RED}==> Limpiando contenedores previos...${NC}"
 docker compose -p "$PROJECT" down --remove-orphans > /dev/null 2>&1 || true
 
 existing=$(docker ps -a --format '{{.Names}}')
-for name in vigicom-apache vigicom-emqx vigicom-cloud; do
+for name in vigicom-apache vigicom-emqx vigicom-cloud vigicom-motor; do
     if echo "$existing" | grep -qx "$name"; then
         echo "    removiendo $name (huerfano sin label compose)"
         docker rm -f "$name" > /dev/null
@@ -186,7 +186,9 @@ echo ""
 echo -e "${GREEN}  Cloud         ${WEB_URL}${NC}"
 echo "  MySQL         herramientas-mysql  (host.docker.internal:3306 / user: root / pass: root / db: vigicom_dev)"
 echo "  Login app     admin@vigicom.net.ar / admin123"
+echo "  Motor         vigicom-motor       (MQTT listener + scheduler)"
 echo ""
-echo "  Logs    : docker compose -p ${PROJECT} logs -f cloud"
-echo "  Down    : docker compose -p ${PROJECT} down"
+echo "  Logs cloud  : docker compose -p ${PROJECT} logs -f cloud"
+echo "  Logs motor  : docker compose -p ${PROJECT} logs -f vigicom"
+echo "  Down        : docker compose -p ${PROJECT} down"
 echo ""

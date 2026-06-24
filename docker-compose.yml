@@ -57,5 +57,20 @@ services:
     entrypoint: ["/init.sh"]
     command: ["/opt/emqx/bin/emqx", "foreground"]
 
+  vigicom:
+    build:
+      context: .
+      dockerfile: docker/motor/Dockerfile
+    container_name: vigicom-motor
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    working_dir: /app
+    env_file:
+      - .env.development
+    volumes:
+      - ./motor:/app
+    command: ["python", "-u", "motor.py"]
+
 volumes:
   vigicom_emqx_data:

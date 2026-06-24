@@ -88,7 +88,7 @@ echo "        OK -- Compose $(sudo docker compose version --short) / buildx $(su
 
 # ---- 4. Verificar artefactos transferidos ----
 echo "[ 4/9 ] Verificando archivos del proyecto..."
-for f in cloud docker/php/Dockerfile env.php .env.production; do
+for f in cloud docker/php/Dockerfile motor/motor.py motor/requirements.txt docker/motor/Dockerfile env.php .env.production; do
     if [ ! -e "$APP_DIR/$f" ]; then
         echo "        ERROR: falta $APP_DIR/$f"
         echo "        Re-correr scripts/aprovisionar.sh desde la maquina local."
@@ -159,6 +159,19 @@ ${EXTRA_MOUNTS}      - ./env.php:/var/www/env.php
       - ./docker/emqx/init.sh:/init.sh:ro
     entrypoint: ["/init.sh"]
     command: ["/opt/emqx/bin/emqx", "foreground"]
+    restart: unless-stopped
+
+  vigicom:
+    container_name: vigicom-motor
+    build:
+      context: .
+      dockerfile: docker/motor/Dockerfile
+    working_dir: /app
+    env_file:
+      - .env.production
+    volumes:
+      - ./motor:/app
+    command: ["python", "-u", "motor.py"]
     restart: unless-stopped
 
 volumes:

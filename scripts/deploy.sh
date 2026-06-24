@@ -57,7 +57,7 @@ echo "  Subiendo cloud/, docker/, db/, api/, robot/, app/, www/, panel/ y .env.p
 cd "$BASE_LOCAL"
 
 EXTRA_DIRS=""
-for d in db api robot app www panel; do
+for d in db api robot app www panel motor; do
     if [ -d "$BASE_LOCAL/$d" ]; then
         EXTRA_DIRS="$EXTRA_DIRS $d"
     fi
