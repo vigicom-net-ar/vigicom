@@ -1,35 +1,21 @@
 # Vigicom - stack local de desarrollo
 # Cada app PHP es un servicio separado (mismo Dockerfile, distinto bind y puerto).
 # Para agregar una nueva app, copiar el bloque "cloud" cambiando puerto + volume.
+#
+# La base MySQL no vive en este compose: se usa el contenedor compartido
+# `herramientas-mysql` (stack `herramientas`), accesible desde los contenedores
+# de esta stack via `host.docker.internal:3306`. Base: `vigicom_dev`.
 
 name: vigicom
 
 services:
-  db:
-    image: mysql:8.0
-    container_name: vigicom-mysql
-    restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: vigicom_dev
-    ports:
-      - "3310:3306"
-    volumes:
-      - vigicom_dbdata:/var/lib/mysql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot", "--silent"]
-      interval: 5s
-      timeout: 3s
-      retries: 30
-
   cloud:
     build:
       context: ./docker/php
     container_name: vigicom-apache
     restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8090:8090"   # cloud  -> /var/www/cloud
       - "8104:8104"   # api    -> /var/www/api
@@ -49,13 +35,7 @@ services:
       - ./.env.development:/var/www/.env.development
       - ./.env.production:/var/www/.env.production
     environment:
-      APP_ENV: dev
       APP_URL: http://localhost:8090
-      DB_HOST: db
-      DB_PORT: "3306"
-      DB_NAME: vigicom_dev
-      DB_USER: root
-      DB_PASS: root
 
   emqx:
     image: emqx/emqx:5.8
@@ -78,5 +58,4 @@ services:
     command: ["/opt/emqx/bin/emqx", "foreground"]
 
 volumes:
-  vigicom_dbdata:
   vigicom_emqx_data:

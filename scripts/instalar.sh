@@ -4,23 +4,26 @@
 #
 # Que hace:
 #   - Verifica que Docker este disponible.
+#   - Verifica que el contenedor compartido `herramientas-mysql` este corriendo
+#     (la DB no vive en este stack; viene del stack `herramientas`).
 #   - Tira abajo el stack previo y lo recrea (down + up -d --build).
-#   - Por defecto preserva el volumen de MySQL (los datos sobreviven al rebuild).
-#   - Espera a que MySQL este healthy y la app responda en HTTP.
+#   - Espera a que la app responda en HTTP.
 #   - Invoca install.php para crear tablas y usuario admin.
 #
 # Flags:
-#   --reset-data   Borra el volumen de MySQL (vigicom_dbdata) -- DB virgen.
 #   --no-install   No invoca install.php al final.
 #   --no-build     Saltea el build (mas rapido si no cambio el Dockerfile).
 #
 # Servicios:
-#   - vigicom-mysql   MySQL 8 en 127.0.0.1:3310
 #   - vigicom-apache  PHP 8.2 + Apache en http://localhost:8090
+#   - vigicom-emqx    EMQX broker MQTT
+#
+# DB:
+#   - `herramientas-mysql` (stack `herramientas`), accedido por los
+#     contenedores via host.docker.internal:3306, base `vigicom_dev`.
 #
 # Uso:
 #   bash ./scripts/instalar.sh
-#   bash ./scripts/instalar.sh --reset-data
 # ============================================================
 
 set -e
@@ -32,20 +35,17 @@ cd "$REPO_ROOT"
 
 PROJECT="vigicom"
 APP_PORT=8090
-DB_PORT=3310
 WEB_URL="http://localhost:${APP_PORT}"
 
 # --- Flags ------------------------------------------------------------------
-RESET_DATA=false
 NO_INSTALL=false
 NO_BUILD=false
 for arg in "$@"; do
     case "$arg" in
-        --reset-data) RESET_DATA=true ;;
         --no-install) NO_INSTALL=true ;;
         --no-build)   NO_BUILD=true ;;
         -h|--help)
-            sed -n '2,22p' "$0"
+            sed -n '2,26p' "$0"
             exit 0
             ;;
         *)
@@ -72,29 +72,29 @@ if ! docker version --format '{{.Server.Version}}' > /dev/null 2>&1; then
     exit 1
 fi
 
+# --- Pre-flight: DB compartida ----------------------------------------------
+# La base MySQL no la levanta este compose; viene del stack `herramientas`
+# (contenedor `herramientas-mysql`). Si no esta corriendo, la app no va a
+# levantar bien, asi que avisamos temprano.
+if ! docker ps --format '{{.Names}}' | grep -qx "herramientas-mysql"; then
+    echo -e "${YELLOW}AVISO: el contenedor 'herramientas-mysql' no esta corriendo.${NC}"
+    echo -e "${YELLOW}       Levantalo desde el stack 'herramientas' antes de continuar,${NC}"
+    echo -e "${YELLOW}       o la app no va a poder conectarse a la DB.${NC}"
+fi
+
 # --- Limpiar contenedores previos -------------------------------------------
 # El orden importa:
-#   1) `docker compose down` SIEMPRE primero. Por defecto preserva el volumen
-#      `vigicom_dbdata` (los datos sobreviven al rebuild). Con --reset-data se
-#      agrega -v y MySQL vuelve a correr el initdb sobre DB virgen.
+#   1) `docker compose down` SIEMPRE primero (remueve contenedores con label
+#      compose). No usamos -v: el unico volumen que sobrevive es el de EMQX,
+#      que queremos preservar entre rebuilds.
 #   2) `docker rm -f` como fallback por si quedaron contenedores con esos
 #      nombres pero sin label de compose.
 echo -e "${RED}==> Limpiando contenedores previos...${NC}"
 
-down_args=("compose" "-p" "$PROJECT" "down" "--remove-orphans")
-if $RESET_DATA; then
-    down_args+=("-v")
-fi
-docker "${down_args[@]}" > /dev/null 2>&1 || true
-
-if $RESET_DATA; then
-    echo "    datos borrados (volumen vigicom_dbdata)"
-else
-    echo "    datos preservados"
-fi
+docker compose -p "$PROJECT" down --remove-orphans > /dev/null 2>&1 || true
 
 existing=$(docker ps -a --format '{{.Names}}')
-for name in vigicom-apache vigicom-mysql vigicom-cloud vigicom-db; do
+for name in vigicom-apache vigicom-emqx vigicom-cloud; do
     if echo "$existing" | grep -qx "$name"; then
         echo "    removiendo $name (huerfano sin label compose)"
         docker rm -f "$name" > /dev/null
@@ -121,29 +121,8 @@ if ! $up_ok; then
     echo ""
     echo -e "${YELLOW}--- docker logs vigicom-apache (ultimas 50 lineas) ---${NC}"
     docker logs --tail 50 vigicom-apache 2>&1 || true
-    echo ""
-    echo -e "${YELLOW}--- docker logs vigicom-mysql (ultimas 50 lineas) ---${NC}"
-    docker logs --tail 50 vigicom-mysql 2>&1 || true
     exit 1
 fi
-
-# --- Esperar MySQL healthy --------------------------------------------------
-echo ""
-echo -e "${RED}==> Esperando a MySQL healthy...${NC}"
-db_ok=false
-for i in $(seq 1 40); do
-    status=$(docker inspect --format '{{.State.Health.Status}}' vigicom-mysql 2>/dev/null || echo "")
-    if [ "$status" = "healthy" ]; then
-        db_ok=true
-        break
-    fi
-    sleep 2
-done
-if ! $db_ok; then
-    echo -e "${RED}ERROR: MySQL no llego a healthy en 80s${NC}"
-    exit 1
-fi
-echo "    MySQL healthy"
 
 # --- Esperar que la app responda --------------------------------------------
 echo ""
@@ -163,7 +142,8 @@ done
 # --- install.php (idempotente: INSERT ... ON DUPLICATE KEY) -----------------
 # El install.php de vigicom crea tablas y el usuario admin. Es la fuente de
 # verdad del bootstrap inicial; chequea existencia antes de crear, asi que
-# reaplicarlo es no-op.
+# reaplicarlo es no-op. La DB (`vigicom_dev` en `herramientas-mysql`) debe
+# existir previamente -- la crea el stack `herramientas`.
 if ! $NO_INSTALL; then
     echo ""
     echo -e "${RED}==> Ejecutando install.php (tablas + admin)${NC}"
@@ -204,7 +184,7 @@ fi
 
 echo ""
 echo -e "${GREEN}  Cloud         ${WEB_URL}${NC}"
-echo "  MySQL         127.0.0.1:${DB_PORT}  (user: root / pass: root / db: vigicom_dev)"
+echo "  MySQL         herramientas-mysql  (host.docker.internal:3306 / user: root / pass: root / db: vigicom_dev)"
 echo "  Login app     admin@vigicom.net.ar / admin123"
 echo ""
 echo "  Logs    : docker compose -p ${PROJECT} logs -f cloud"

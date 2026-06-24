@@ -58,11 +58,11 @@ Todo lo demás pasa por `/api/*.php`.
 
 ## Setup en local
 
-1. Crear la base:
+1. Crear la base en el contenedor compartido `herramientas-mysql` (stack `herramientas`):
    ```sql
    CREATE DATABASE vigicom_dev CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
    ```
-2. Variables de entorno en `.env.development` (en la raíz del repo): `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASS`, `DB_CHARSET`, `APP_KEY_CLOUD`.
+2. Variables de entorno en `.env.development` (en la raíz del repo): `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASS`, `DB_CHARSET`, `APP_KEY_CLOUD`. En dev, `DB_HOST=host.docker.internal` apunta a `herramientas-mysql`.
 3. Levantar el contenedor Docker (puerto 8086) o apuntar un vhost local al directorio `cloud/`.
 4. Abrir `http://localhost:8086/install.php` para aplicar el esquema y crear el admin inicial.
 5. **Borrar `install.php`.**

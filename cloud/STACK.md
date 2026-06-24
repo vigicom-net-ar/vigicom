@@ -110,7 +110,7 @@ través de `env.php` (en la raíz del repositorio padre),
 que carga `.env.development` o `.env.production` según `APP_ENV`.
 
 `APP_ENV` lo setea el contenedor Docker:
-- En desarrollo: `APP_ENV=development` → lee `.env.development` (MySQL local en Docker, base `vigicom_dev`).
+- En desarrollo: `APP_ENV=development` → lee `.env.development` (MySQL compartida en contenedor `herramientas-mysql` via `host.docker.internal:3306`, base `vigicom_dev`).
 - En producción: `APP_ENV=production` → lee `.env.production` (RDS, base `vigicom`).
 
 Constantes que cloud usa habitualmente (definidas por `env.php`):
@@ -124,10 +124,10 @@ Constantes que cloud usa habitualmente (definidas por `env.php`):
 
 ## 7. Base de datos
 
-- **Desarrollo:** MySQL 8.0 en un contenedor llamado `vigicom-mysql` (lo
-  levanta `docker-compose.override.yml`). Host `mysql` desde el
-  contenedor PHP, `localhost:3306` desde Windows. Base `vigicom_dev`,
-  usuario `root`, password `123`.
+- **Desarrollo:** MySQL 8.0 en el contenedor compartido `herramientas-mysql`
+  (stack `herramientas`, fuera de este compose). Host
+  `host.docker.internal:3306` desde el contenedor PHP, `localhost:3306`
+  desde Windows. Base `vigicom_dev`, usuario `root`, password `root`.
 - **Producción:** RDS MySQL externo
   (`california.ccfymgq888f0.us-east-1.rds.amazonaws.com`), base `vigicom`.
 - **Esquema:** los `CREATE TABLE` y `ALTER` están centralizados en
