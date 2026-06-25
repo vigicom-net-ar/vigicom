@@ -1,0 +1,11 @@
+# Archivos de entorno con credenciales
+.env
+.env.*
+!.env.example
+
+# Config local de VSCode / SFTP
+.vscode/sftp.json
+
+# Sistema
+.DS_Store
+Thumbs.db

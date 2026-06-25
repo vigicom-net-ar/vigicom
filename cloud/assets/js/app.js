@@ -4182,14 +4182,23 @@
                     '<span class="tile-title">Parámetros</span>' +
                     '<span class="tile-desc">Variables internas del sistema.</span>' +
                 '</button>' +
+                '<button type="button" class="tile-card" id="cfgTileS3Exp">' +
+                    '<span class="tile-icon">📁</span>' +
+                    '<span class="tile-title">Explorador S3</span>' +
+                    '<span class="tile-desc">Navegá, subí, descargá y eliminá carpetas y archivos del bucket del entorno actual.</span>' +
+                '</button>' +
             '</div>' +
 
             modalParametroFormHtml() +
             modalConsultarParametroHtml() +
             confirmDeleteParametroHtml() +
-            modalParametrosListaHtml();
+            modalParametrosListaHtml() +
+            modalExploradorS3Html() +
+            confirmDeleteS3Html() +
+            ctxMenuS3Html();
 
         wireConfigView();
+        wireExploradorS3View();
     }
 
     function modalParametrosListaHtml() {
@@ -4543,6 +4552,595 @@
             }
         });
     }
+
+    // -------- Vista: Explorador S3 (Herramientas) -------------------------
+
+    var s3ExpPrefix      = '';
+    var s3ExpNextToken   = null;
+    var s3ExpBucket      = '';
+    var s3ExpCargando    = false;
+    var s3ExpCtxKey      = null;
+    var s3ExpCtxIsFolder = false;
+    var s3ExpCtxUrl      = '';
+    var s3ExpUltimaLista = { folders: [], objects: [] };
+    var s3ExpPendingDeleteKey      = null;
+    var s3ExpPendingDeleteIsFolder = false;
+
+    function modalExploradorS3Html() {
+        return '<div class="modal-backdrop" id="s3ExpModalBackdrop">' +
+            '<div class="modal s3-exp-modal">' +
+                '<div class="modal-header">' +
+                    '<div class="modal-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+                        '<span style="font-size:1.2rem">☁️</span>' +
+                        '<span>Explorador S3</span>' +
+                        '<span class="badge badge-info" id="s3ExpBucket" style="font-family:monospace">—</span>' +
+                    '</div>' +
+                    '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+                '</div>' +
+                '<div class="modal-body" style="gap:12px">' +
+                    '<div class="s3-exp-toolbar">' +
+                        '<div class="s3-exp-breadcrumbs" id="s3ExpBreadcrumbs"></div>' +
+                        '<div class="s3-exp-toolbar-right">' +
+                            '<button class="btn-icon" type="button" title="Refrescar" id="s3ExpBtnRefrescar">' +
+                                '<i class="fa-solid fa-rotate"></i>' +
+                            '</button>' +
+                            '<input type="file" id="s3ExpUploadInput" style="display:none">' +
+                            '<button class="btn btn-secondary btn-sm" type="button" id="s3ExpBtnSubir">' +
+                                '<i class="fa-solid fa-upload"></i> Subir' +
+                            '</button>' +
+                            '<button class="btn btn-secondary btn-sm" type="button" id="s3ExpBtnNuevaCarpeta">' +
+                                '<i class="fa-solid fa-folder-plus"></i> Nueva carpeta' +
+                            '</button>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="table-card s3-exp-table-card">' +
+                        '<table>' +
+                            '<thead><tr>' +
+                                '<th style="width:36px"></th>' +
+                                '<th>Nombre</th>' +
+                                '<th style="width:120px">Tamaño</th>' +
+                                '<th style="width:160px">Modificado</th>' +
+                                '<th style="width:60px; text-align:center">Acciones</th>' +
+                            '</tr></thead>' +
+                            '<tbody id="s3ExpTbody">' +
+                                '<tr><td colspan="5" style="text-align:center;padding:24px"><div class="spin"></div></td></tr>' +
+                            '</tbody>' +
+                        '</table>' +
+                    '</div>' +
+                    '<div class="s3-exp-footer-info" id="s3ExpFooterInfo"></div>' +
+                    '<div style="text-align:center">' +
+                        '<button class="btn btn-ghost btn-sm" id="s3ExpBtnMas" style="display:none" type="button">Cargar más</button>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="modal-footer">' +
+                    '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+                '</div>' +
+            '</div>' +
+        '</div>';
+    }
+
+    function ctxMenuS3Html() {
+        return '<div id="s3ExpCtxMenu" class="ctx-menu" role="menu">' +
+            '<button type="button" data-action="abrir" role="menuitem">' +
+                '<i class="fa-solid fa-up-right-from-square"></i><span>Abrir / Descargar</span>' +
+            '</button>' +
+            '<button type="button" data-action="copiar-url" role="menuitem">' +
+                '<i class="fa-solid fa-link"></i><span>Copiar URL pública</span>' +
+            '</button>' +
+            '<div class="ctx-menu-sep"></div>' +
+            '<button type="button" data-action="eliminar" role="menuitem" class="ctx-menu-danger">' +
+                '<i class="fa-solid fa-trash"></i><span>Eliminar</span>' +
+            '</button>' +
+        '</div>';
+    }
+
+    function confirmDeleteS3Html() {
+        return '<div class="confirm-backdrop" id="s3ExpConfirm"><div class="confirm-box">' +
+            '<div class="confirm-title" id="s3ExpConfirmTitle">Eliminar</div>' +
+            '<div class="confirm-msg" id="s3ExpConfirmMsg">Esta acción no se puede deshacer.</div>' +
+            '<div class="confirm-actions">' +
+                '<button class="btn btn-ghost"  data-act="cancel" type="button">Cancelar</button>' +
+                '<button class="btn btn-danger" id="s3ExpConfirmBtn" type="button">Eliminar</button>' +
+            '</div>' +
+        '</div></div>';
+    }
+
+    function s3ExpEsImagen(nombre) {
+        return /\.(jpe?g|png|gif|webp|bmp|svg|avif)$/i.test(nombre || '');
+    }
+
+    function s3ExpIconoArchivo(nombre) {
+        var ext = String(nombre || '').toLowerCase().split('.').pop();
+        var map = {
+            pdf: 'fa-file-pdf',
+            doc: 'fa-file-word',  docx: 'fa-file-word',
+            xls: 'fa-file-excel', xlsx: 'fa-file-excel', csv: 'fa-file-csv',
+            ppt: 'fa-file-powerpoint', pptx: 'fa-file-powerpoint',
+            zip: 'fa-file-zipper', rar: 'fa-file-zipper', '7z': 'fa-file-zipper', tar: 'fa-file-zipper', gz: 'fa-file-zipper',
+            mp3: 'fa-file-audio', wav: 'fa-file-audio', ogg: 'fa-file-audio', m4a: 'fa-file-audio',
+            mp4: 'fa-file-video', mov: 'fa-file-video', avi: 'fa-file-video', mkv: 'fa-file-video', webm: 'fa-file-video',
+            txt: 'fa-file-lines', md: 'fa-file-lines', log: 'fa-file-lines',
+            json: 'fa-file-code', xml: 'fa-file-code', html: 'fa-file-code', css: 'fa-file-code', js: 'fa-file-code',
+            jpg: 'fa-file-image', jpeg: 'fa-file-image', png: 'fa-file-image', gif: 'fa-file-image',
+            webp: 'fa-file-image', bmp: 'fa-file-image', svg: 'fa-file-image', avif: 'fa-file-image'
+        };
+        return map[ext] || 'fa-file';
+    }
+
+    function s3ExpFormatBytes(b) {
+        if (b == null) return '—';
+        var n = parseInt(b, 10);
+        if (!(n >= 0)) return '—';
+        if (n < 1024) return n + ' B';
+        if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+        if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
+        return (n / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    }
+
+    function s3ExpFormatFecha(iso) {
+        if (!iso) return '—';
+        var d = new Date(iso);
+        if (isNaN(d.getTime())) return '—';
+        var pad = function (n) { return String(n).padStart(2, '0'); };
+        return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+            ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    }
+
+    function s3ExpNombreRelativo(key, prefix) {
+        if (prefix && key.indexOf(prefix) === 0) return key.substring(prefix.length);
+        return key;
+    }
+
+    function s3ExpEscAttr(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (ch) {
+            return ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[ch];
+        });
+    }
+
+    function abrirExploradorS3() {
+        s3ExpPrefix    = '';
+        s3ExpNextToken = null;
+        s3ExpUltimaLista = { folders: [], objects: [] };
+        var bd = document.getElementById('s3ExpModalBackdrop');
+        if (!bd) return;
+        bd.classList.add('open');
+        s3ExpCargar(true);
+    }
+
+    function cerrarExploradorS3() {
+        var bd = document.getElementById('s3ExpModalBackdrop');
+        if (bd) bd.classList.remove('open');
+        s3ExpCerrarCtx();
+    }
+
+    function s3ExpRecargar() {
+        s3ExpNextToken = null;
+        s3ExpUltimaLista = { folders: [], objects: [] };
+        s3ExpCargar(true);
+    }
+
+    function s3ExpNavegar(prefix) {
+        s3ExpPrefix    = prefix || '';
+        s3ExpNextToken = null;
+        s3ExpUltimaLista = { folders: [], objects: [] };
+        s3ExpCargar(true);
+    }
+
+    async function s3ExpCargar(reiniciar) {
+        if (s3ExpCargando) return;
+        s3ExpCargando = true;
+        var tbody     = document.getElementById('s3ExpTbody');
+        var btnMas    = document.getElementById('s3ExpBtnMas');
+        var info      = document.getElementById('s3ExpFooterInfo');
+        var bucketEl  = document.getElementById('s3ExpBucket');
+
+        if (reiniciar) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:24px"><div class="spin"></div></td></tr>';
+            info.textContent  = '';
+            if (btnMas) btnMas.style.display = 'none';
+        }
+
+        var qs = '?prefix=' + encodeURIComponent(s3ExpPrefix);
+        if (!reiniciar && s3ExpNextToken) qs += '&token=' + encodeURIComponent(s3ExpNextToken);
+
+        try {
+            var data = await api('/api/herramientas_s3_list.php' + qs);
+            s3ExpBucket = data.bucket || '';
+            if (bucketEl) bucketEl.textContent = s3ExpBucket || '—';
+
+            if (reiniciar) {
+                s3ExpUltimaLista = { folders: data.folders || [], objects: data.objects || [] };
+            } else {
+                s3ExpUltimaLista.folders = s3ExpUltimaLista.folders.concat(data.folders || []);
+                s3ExpUltimaLista.objects = s3ExpUltimaLista.objects.concat(data.objects || []);
+            }
+            s3ExpNextToken = data.next_token || null;
+
+            s3ExpRenderBreadcrumbs(s3ExpPrefix);
+            s3ExpRenderTabla(s3ExpPrefix);
+
+            if (btnMas) {
+                if (data.truncated && s3ExpNextToken) {
+                    btnMas.style.display = '';
+                    btnMas.disabled = false;
+                    btnMas.textContent = 'Cargar más';
+                } else {
+                    btnMas.style.display = 'none';
+                }
+            }
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="5" class="s3-exp-empty">' + e(err.message) + '</td></tr>';
+            info.textContent = '';
+        } finally {
+            s3ExpCargando = false;
+        }
+    }
+
+    function s3ExpCargarMas() {
+        var btnMas = document.getElementById('s3ExpBtnMas');
+        if (btnMas) { btnMas.disabled = true; btnMas.textContent = 'Cargando…'; }
+        s3ExpCargar(false);
+    }
+
+    function s3ExpRenderBreadcrumbs(prefix) {
+        var container = document.getElementById('s3ExpBreadcrumbs');
+        if (!container) return;
+        var parts = (prefix || '').split('/').filter(function (s) { return s !== ''; });
+        var html = '';
+        if (parts.length === 0) {
+            html += '<button type="button" class="s3-exp-crumb current" data-prefix="">🏠 raíz</button>';
+        } else {
+            html += '<button type="button" class="s3-exp-crumb" data-prefix="">🏠 raíz</button>';
+            var acc = '';
+            for (var i = 0; i < parts.length; i++) {
+                acc += parts[i] + '/';
+                var isLast = (i === parts.length - 1);
+                html += '<span class="s3-exp-crumb-sep">/</span>';
+                html += '<button type="button" class="s3-exp-crumb' + (isLast ? ' current' : '') + '" data-prefix="' + s3ExpEscAttr(acc) + '">' + e(parts[i]) + '</button>';
+            }
+        }
+        container.innerHTML = html;
+        container.querySelectorAll('.s3-exp-crumb').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                if (btn.classList.contains('current')) return;
+                s3ExpNavegar(btn.getAttribute('data-prefix') || '');
+            });
+        });
+    }
+
+    function s3ExpRenderTabla(prefix) {
+        var tbody = document.getElementById('s3ExpTbody');
+        var info  = document.getElementById('s3ExpFooterInfo');
+        if (!tbody) return;
+
+        var folders = s3ExpUltimaLista.folders || [];
+        var objects = s3ExpUltimaLista.objects || [];
+
+        var rows = '';
+
+        // Fila ".." para subir de nivel
+        if (prefix && prefix !== '') {
+            var parent = prefix.replace(/\/$/, '');
+            var slash  = parent.lastIndexOf('/');
+            var parentPrefix = slash === -1 ? '' : (parent.substring(0, slash + 1));
+            rows += '<tr class="row-clickable" data-act-row="navegar" data-prefix="' + s3ExpEscAttr(parentPrefix) + '">' +
+                '<td><span class="s3-exp-icon"><i class="fa-solid fa-turn-up" style="transform:rotate(-90deg)"></i></span></td>' +
+                '<td><div class="s3-exp-nombre">..</div></td>' +
+                '<td class="s3-exp-size">—</td>' +
+                '<td class="s3-exp-date">—</td>' +
+                '<td></td>' +
+            '</tr>';
+        }
+
+        // Carpetas
+        folders.forEach(function (f) {
+            var rel = s3ExpNombreRelativo(f.key, prefix);
+            rows += '<tr class="row-clickable" data-act-row="navegar" data-prefix="' + s3ExpEscAttr(f.key) + '">' +
+                '<td><span class="s3-exp-icon"><i class="fa-solid fa-folder" style="color:var(--warn)"></i></span></td>' +
+                '<td><div class="s3-exp-nombre">' + e(rel) + '</div></td>' +
+                '<td class="s3-exp-size">—</td>' +
+                '<td class="s3-exp-date">—</td>' +
+                '<td style="text-align:center">' +
+                    '<button class="btn-icon-sm" type="button" data-act="ctx" data-key="' + s3ExpEscAttr(f.key) + '" data-folder="1" data-url="" title="Acciones">' +
+                        '<i class="fa-solid fa-bars"></i>' +
+                    '</button>' +
+                '</td>' +
+            '</tr>';
+        });
+
+        // Archivos
+        objects.forEach(function (o) {
+            var rel = s3ExpNombreRelativo(o.key, prefix);
+            var iconCell;
+            if (s3ExpEsImagen(rel)) {
+                iconCell = '<img class="s3-exp-thumb" loading="lazy" src="' + s3ExpEscAttr(o.url) + '" ' +
+                    'onerror="this.outerHTML=\'<span class=\\\'s3-exp-icon\\\'><i class=\\\'fa-solid fa-file-image\\\'></i></span>\'">';
+            } else {
+                iconCell = '<span class="s3-exp-icon"><i class="fa-solid ' + s3ExpIconoArchivo(rel) + '"></i></span>';
+            }
+            rows += '<tr class="row-clickable" data-act-row="abrir" data-url="' + s3ExpEscAttr(o.url) + '" data-key="' + s3ExpEscAttr(o.key) + '">' +
+                '<td>' + iconCell + '</td>' +
+                '<td><div class="s3-exp-nombre">' + e(rel) + '</div></td>' +
+                '<td class="s3-exp-size">' + e(s3ExpFormatBytes(o.size)) + '</td>' +
+                '<td class="s3-exp-date">' + e(s3ExpFormatFecha(o.last_modified)) + '</td>' +
+                '<td style="text-align:center">' +
+                    '<button class="btn-icon-sm" type="button" data-act="ctx" data-key="' + s3ExpEscAttr(o.key) + '" data-folder="0" data-url="' + s3ExpEscAttr(o.url) + '" title="Acciones">' +
+                        '<i class="fa-solid fa-bars"></i>' +
+                    '</button>' +
+                '</td>' +
+            '</tr>';
+        });
+
+        if (folders.length === 0 && objects.length === 0 && !prefix) {
+            rows = '<tr><td colspan="5" class="s3-exp-empty">Esta carpeta está vacía.</td></tr>';
+            if (info) info.textContent = '0 elementos';
+        } else if (folders.length === 0 && objects.length === 0) {
+            rows += '<tr><td colspan="5" class="s3-exp-empty">Esta carpeta está vacía.</td></tr>';
+        }
+
+        tbody.innerHTML = rows;
+
+        if (info) {
+            var totalBytes = objects.reduce(function (a, o) { return a + (parseInt(o.size, 10) || 0); }, 0);
+            info.innerHTML =
+                '<span>' + folders.length + ' carpeta' + (folders.length === 1 ? '' : 's') +
+                ' · ' + objects.length + ' archivo' + (objects.length === 1 ? '' : 's') +
+                ' · ' + e(s3ExpFormatBytes(totalBytes)) + ' en esta carpeta</span>' +
+                '<span>' + e(s3ExpPrefix || '/') + '</span>';
+        }
+    }
+
+    function s3ExpAbrirCtx(ev, key, esCarpeta, url) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        s3ExpCtxKey      = key;
+        s3ExpCtxIsFolder = !!esCarpeta;
+        s3ExpCtxUrl      = url || '';
+
+        var menu = document.getElementById('s3ExpCtxMenu');
+        if (!menu) return;
+        // Ocultar abrir/copiar-url para carpetas
+        menu.querySelectorAll('button[data-action]').forEach(function (b) {
+            var a = b.getAttribute('data-action');
+            if (esCarpeta && (a === 'abrir' || a === 'copiar-url')) {
+                b.style.display = 'none';
+            } else {
+                b.style.display = '';
+            }
+        });
+
+        menu.classList.add('open');
+        // Posicionar
+        var x = ev.clientX || 0;
+        var y = ev.clientY || 0;
+        menu.style.left = '0px';
+        menu.style.top  = '0px';
+        var rect = menu.getBoundingClientRect();
+        var vw   = window.innerWidth;
+        var vh   = window.innerHeight;
+        if (x + rect.width  > vw) x = Math.max(0, vw - rect.width  - 8);
+        if (y + rect.height > vh) y = Math.max(0, vh - rect.height - 8);
+        menu.style.left = x + 'px';
+        menu.style.top  = y + 'px';
+    }
+
+    function s3ExpCerrarCtx() {
+        var menu = document.getElementById('s3ExpCtxMenu');
+        if (menu) menu.classList.remove('open');
+    }
+
+    function s3ExpAbrirArchivo(url) {
+        if (!url) return;
+        window.open(url, '_blank', 'noopener');
+    }
+
+    function s3ExpCopiarUrlPublica(url) {
+        if (!url) return;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(url).then(function () {
+                toast('URL copiada al portapapeles.');
+            }, function () {
+                window.prompt('URL del archivo:', url);
+            });
+        } else {
+            window.prompt('URL del archivo:', url);
+        }
+    }
+
+    function s3ExpEliminar(key, esCarpeta) {
+        s3ExpPendingDeleteKey      = key;
+        s3ExpPendingDeleteIsFolder = !!esCarpeta;
+
+        var titleEl = document.getElementById('s3ExpConfirmTitle');
+        var msgEl   = document.getElementById('s3ExpConfirmMsg');
+        var conf    = document.getElementById('s3ExpConfirm');
+
+        if (esCarpeta) {
+            titleEl.textContent = 'Eliminar carpeta';
+            msgEl.textContent = "Vas a eliminar la carpeta '" + key + "' y TODO su contenido de forma recursiva. Esta acción no se puede deshacer.";
+        } else {
+            titleEl.textContent = 'Eliminar archivo';
+            msgEl.textContent = "¿Eliminar '" + key + "'? Esta acción no se puede deshacer.";
+        }
+        conf.classList.add('open');
+    }
+
+    async function s3ExpEjecutarEliminacion() {
+        if (!s3ExpPendingDeleteKey) return;
+        var btn  = document.getElementById('s3ExpConfirmBtn');
+        var conf = document.getElementById('s3ExpConfirm');
+        btn.disabled = true;
+        try {
+            await api('/api/herramientas_s3_delete.php', {
+                method: 'POST',
+                body: { key: s3ExpPendingDeleteKey, recursivo: s3ExpPendingDeleteIsFolder }
+            });
+            toast('Eliminado.');
+            conf.classList.remove('open');
+            s3ExpPendingDeleteKey      = null;
+            s3ExpPendingDeleteIsFolder = false;
+            s3ExpRecargar();
+        } catch (err) {
+            toast(err.message, true);
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    async function s3ExpSubirArchivo(fileList) {
+        if (!fileList || fileList.length === 0) return;
+        var file = fileList[0];
+        if (file.size > 20 * 1024 * 1024) {
+            toast('El archivo supera el límite de 20 MB.', true);
+            return;
+        }
+        toast('Subiendo ' + file.name + '…');
+        var fd = new FormData();
+        fd.append('archivo', file);
+        fd.append('prefix',  s3ExpPrefix);
+        fd.append('nombre',  file.name);
+        try {
+            await api('/api/herramientas_s3_upload.php', {
+                method: 'POST',
+                body:   fd
+            });
+            toast('Archivo subido.');
+            s3ExpRecargar();
+        } catch (err) {
+            toast(err.message, true);
+        }
+        // Permitir resubir el mismo archivo
+        var input = document.getElementById('s3ExpUploadInput');
+        if (input) input.value = '';
+    }
+
+    async function s3ExpCrearCarpeta() {
+        var nombre = window.prompt('Nombre de la nueva carpeta:');
+        if (nombre == null) return;
+        nombre = String(nombre).trim();
+        if (nombre === '') return;
+        try {
+            await api('/api/herramientas_s3_create_folder.php', {
+                method: 'POST',
+                body:   { prefix: s3ExpPrefix, nombre: nombre }
+            });
+            toast('Carpeta creada.');
+            s3ExpRecargar();
+        } catch (err) {
+            toast(err.message, true);
+        }
+    }
+
+    function wireExploradorS3View() {
+        var bd       = document.getElementById('s3ExpModalBackdrop');
+        var tbody    = document.getElementById('s3ExpTbody');
+        var btnRef   = document.getElementById('s3ExpBtnRefrescar');
+        var btnMas   = document.getElementById('s3ExpBtnMas');
+        var btnSubir = document.getElementById('s3ExpBtnSubir');
+        var btnNueva = document.getElementById('s3ExpBtnNuevaCarpeta');
+        var input    = document.getElementById('s3ExpUploadInput');
+        var menu     = document.getElementById('s3ExpCtxMenu');
+        var conf     = document.getElementById('s3ExpConfirm');
+        var btnDel   = document.getElementById('s3ExpConfirmBtn');
+
+        var tile = document.getElementById('cfgTileS3Exp');
+        if (tile) tile.addEventListener('click', abrirExploradorS3);
+
+        if (bd) {
+            bd.addEventListener('click', function (ev) {
+                if (ev.target === bd || ev.target.closest('[data-act="close"]')) {
+                    cerrarExploradorS3();
+                }
+            });
+        }
+
+        if (btnRef)   btnRef.addEventListener('click',   s3ExpRecargar);
+        if (btnMas)   btnMas.addEventListener('click',   s3ExpCargarMas);
+        if (btnNueva) btnNueva.addEventListener('click', s3ExpCrearCarpeta);
+        if (btnSubir && input) {
+            btnSubir.addEventListener('click', function () { input.click(); });
+            input.addEventListener('change', function () { s3ExpSubirArchivo(input.files); });
+        }
+
+        if (tbody) {
+            tbody.addEventListener('click', function (ev) {
+                var btn = ev.target.closest('button[data-act="ctx"]');
+                if (btn) {
+                    s3ExpAbrirCtx(
+                        ev,
+                        btn.getAttribute('data-key'),
+                        btn.getAttribute('data-folder') === '1',
+                        btn.getAttribute('data-url') || ''
+                    );
+                    return;
+                }
+                var tr = ev.target.closest('tr[data-act-row]');
+                if (!tr) return;
+                var act = tr.getAttribute('data-act-row');
+                if (act === 'navegar') {
+                    s3ExpNavegar(tr.getAttribute('data-prefix') || '');
+                } else if (act === 'abrir') {
+                    s3ExpAbrirArchivo(tr.getAttribute('data-url') || '');
+                }
+            });
+            tbody.addEventListener('contextmenu', function (ev) {
+                var tr = ev.target.closest('tr[data-act-row]');
+                if (!tr) return;
+                var btn = tr.querySelector('button[data-act="ctx"]');
+                if (!btn) return;
+                s3ExpAbrirCtx(
+                    ev,
+                    btn.getAttribute('data-key'),
+                    btn.getAttribute('data-folder') === '1',
+                    btn.getAttribute('data-url') || ''
+                );
+            });
+        }
+
+        if (menu) {
+            menu.addEventListener('click', function (ev) {
+                var btn = ev.target.closest('button[data-action]');
+                if (!btn) return;
+                var action   = btn.getAttribute('data-action');
+                var key      = s3ExpCtxKey;
+                var isFolder = s3ExpCtxIsFolder;
+                var url      = s3ExpCtxUrl;
+                s3ExpCerrarCtx();
+                if (!key) return;
+                if      (action === 'abrir')      s3ExpAbrirArchivo(url);
+                else if (action === 'copiar-url') s3ExpCopiarUrlPublica(url);
+                else if (action === 'eliminar')   s3ExpEliminar(key, isFolder);
+            });
+        }
+
+        if (conf) {
+            conf.addEventListener('click', function (ev) {
+                if (ev.target === conf || ev.target.closest('[data-act="cancel"]')) {
+                    conf.classList.remove('open');
+                    s3ExpPendingDeleteKey      = null;
+                    s3ExpPendingDeleteIsFolder = false;
+                }
+            });
+        }
+        if (btnDel) btnDel.addEventListener('click', s3ExpEjecutarEliminacion);
+    }
+
+    // Listeners globales del menú contextual S3 (se montan una sola vez).
+    document.addEventListener('click', function (e) {
+        var menu = document.getElementById('s3ExpCtxMenu');
+        if (menu && menu.classList.contains('open') && !menu.contains(e.target)) {
+            s3ExpCerrarCtx();
+        }
+    });
+    document.addEventListener('scroll', function () { s3ExpCerrarCtx(); }, true);
+    window.addEventListener('resize',   function () { s3ExpCerrarCtx(); });
+    document.addEventListener('keydown', function (ev) {
+        if (ev.key !== 'Escape') return;
+        var ctx = document.getElementById('s3ExpCtxMenu');
+        if (ctx && ctx.classList.contains('open')) { s3ExpCerrarCtx(); return; }
+        var bd = document.getElementById('s3ExpModalBackdrop');
+        if (bd && bd.classList.contains('open')) { cerrarExploradorS3(); }
+    });
 
     // -------- Chrome de la app --------------------------------------------
 
