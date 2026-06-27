@@ -30,6 +30,7 @@
         '/alarmas':      { title: 'Alarmas',       render: renderAlarmas },
         '/equipos':      { title: 'Equipos',       render: renderEquipos },
         '/dispositivos': { title: 'Dispositivos',  render: renderTodo },
+        '/disparos':     { title: 'Disparos',      render: renderDisparos },
         '/eventos':      { title: 'Eventos',       render: renderTodo },
         '/senales':      { title: 'Señales',       render: renderSenales },
         '/reportes':     { title: 'Reportes',      render: renderTodo },
@@ -3090,6 +3091,1041 @@
         });
 
         applyFilters();
+    }
+
+    // -------- Vista: Disparos ---------------------------------------------
+
+    var disparosFiltrosDefault = {
+        sort:      'id',
+        dir:       'desc',
+        limit:     100,
+        filtro_id: '',
+        comunidad: '',
+        casa:      '',
+        guardia:   '',
+        estado:    '',
+        cerrado:   '',
+        desde:     '',
+        hasta:     ''
+    };
+    var disparosFiltros = Object.assign({}, disparosFiltrosDefault);
+    var disparosFiltrosSnapshot = null;
+    var disparosCache = { comunidades: [], casas: [], guardias: [] };
+    var disparosRegistroCache = {};
+    var disparosEditarIdPendiente = null;
+
+    function disparosQueryString() {
+        var qs = [];
+        Object.keys(disparosFiltros).forEach(function (k) {
+            var v = disparosFiltros[k];
+            if (v !== '' && v != null) {
+                qs.push(encodeURIComponent(k) + '=' + encodeURIComponent(v));
+            }
+        });
+        return qs.length ? ('?' + qs.join('&')) : '';
+    }
+
+    function disparosFiltrosActivos() {
+        var n = 0;
+        Object.keys(disparosFiltrosDefault).forEach(function (k) {
+            if (k === 'sort' || k === 'dir' || k === 'limit') return;
+            if (String(disparosFiltros[k]) !== String(disparosFiltrosDefault[k])) n++;
+        });
+        return n;
+    }
+
+    async function renderDisparos(view) {
+        var data        = await api('/api/disparos.php' + disparosQueryString());
+        var disparos    = data.disparos    || [];
+        var kpis        = data.kpis        || {};
+        disparosCache.comunidades = data.comunidades || [];
+        disparosCache.casas       = data.casas       || [];
+        disparosCache.guardias    = data.guardias    || [];
+        disparosRegistroCache     = {};
+
+        view.innerHTML =
+            moduleHelpDisparosHtml() +
+
+            '<div class="stats-bar" id="dspStats">' + renderDisparosStats(kpis) + '</div>' +
+
+            toolbarDisparosHtml() +
+
+            '<div class="table-card">' +
+                '<table><thead><tr>' +
+                    '<th>Código</th><th>Modo</th><th>Fecha</th><th>Comunidad</th><th>Casa</th>' +
+                    '<th>Resultado</th><th>Cierre</th><th>Espera</th><th>Estado</th>' +
+                    '<th style="text-align:center;">Acciones</th>' +
+                '</tr></thead><tbody id="dspTbody">' +
+                renderFilasDisparos(disparos) +
+                '</tbody></table>' +
+                '<div class="table-empty" id="dspEmpty" style="display:none;">No hay disparos que coincidan con la búsqueda.</div>' +
+            '</div>' +
+            '<div class="text-muted text-sm" id="dspCount" style="margin-top:10px;">' +
+                disparosCountText(disparos.length) +
+            '</div>' +
+
+            modalDisparoHtml(disparosCache.comunidades, disparosCache.casas, disparosCache.guardias) +
+            modalFiltrosDisparosHtml(disparosCache.comunidades, disparosCache.casas, disparosCache.guardias) +
+            modalConsultarDisparoHtml() +
+            modalCalculadorDisparosHtml(disparosCache.guardias) +
+            confirmDeleteDisparoHtml() +
+            ctxMenuDisparosHtml() +
+            ctxMenuToolbarDisparosHtml();
+
+        wireDisparosView();
+    }
+
+    function moduleHelpDisparosHtml() {
+        return '<div class="module-help" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin-bottom:16px;box-shadow:var(--shadow);display:flex;gap:14px;align-items:center;">' +
+            '<div style="font-size:1.6rem;line-height:1;">🚨</div>' +
+            '<div style="font-size:.88rem;color:var(--muted);line-height:1.45;">' +
+                'Los disparos son los eventos de alarma generados por las casas y comunidades, con el momento del aviso, la guardia que los toma y el resultado de la atención.' +
+            '</div>' +
+        '</div>';
+    }
+
+    function renderDisparosStats(kpis) {
+        return statCard('Total',    kpis.total    || 0, 'orange', 'Disparos registrados') +
+               statCard('Abiertos', kpis.abiertos || 0, 'red',    'Sin cierre registrado') +
+               statCard('Hoy',      kpis.hoy      || 0, 'green',  'Registrados hoy');
+    }
+
+    function disparosCountText(n) {
+        return 'Mostrando ' + n + ' resultado(s) (límite ' + disparosFiltros.limit + ').';
+    }
+
+    function toolbarDisparosHtml() {
+        var n = disparosFiltrosActivos();
+        var badge = '<span class="btn-icon-badge"' + (n ? '' : ' style="display:none;"') + '>' + (n || '') + '</span>';
+        var activo = n ? ' active' : '';
+        return '<div class="toolbar">' +
+            '<div class="toolbar-left" style="gap:8px;flex-wrap:wrap;">' +
+                '<div class="search-wrap">' +
+                    '<input type="search" id="dspSearch" class="search-input" placeholder="🔍 Buscar modo, comunidad, casa o comentario…">' +
+                    '<button class="search-clear" id="dspSearchClear" type="button" style="display:none;">&times;</button>' +
+                '</div>' +
+                '<button class="btn btn-ghost btn-icon' + activo + '" id="dspFiltros" type="button" title="Filtros">' +
+                    '<i class="fa-solid fa-filter"></i>' + badge +
+                '</button>' +
+                '<button class="btn btn-ghost btn-icon" id="dspRefrescar" type="button" title="Refrescar">' +
+                    '<i class="fa-solid fa-rotate"></i>' +
+                '</button>' +
+                '<button class="btn btn-ghost btn-icon" id="dspMenuToolbar" type="button" title="Más opciones">' +
+                    '<i class="fa-solid fa-bars"></i>' +
+                '</button>' +
+            '</div>' +
+            '<div class="toolbar-right">' +
+                '<button class="btn btn-primary" id="dspNuevo" type="button">+ Nuevo disparo</button>' +
+            '</div>' +
+        '</div>';
+    }
+
+    function ctxMenuToolbarDisparosHtml() {
+        return '<div id="dspToolbarCtxMenu" class="ctx-menu" role="menu">' +
+            '<button type="button" data-action="calculador" role="menuitem">' +
+                '<i class="fa-solid fa-calculator"></i><span>Calculador</span>' +
+            '</button>' +
+        '</div>';
+    }
+
+    function modalCalculadorDisparosHtml(guardias) {
+        var optsGuardia = guardias.map(function (g) {
+            return '<option value="' + g.id + '">' + e(g.nombre || ('#' + g.id)) + '</option>';
+        }).join('');
+        var hoy   = new Date();
+        var mesPad = (hoy.getMonth() + 1) < 10 ? '0' + (hoy.getMonth() + 1) : '' + (hoy.getMonth() + 1);
+        var mesActual = hoy.getFullYear() + '-' + mesPad;
+
+        return '<div class="modal-backdrop" id="dspCalcModal"><div class="modal" style="max-width:1560px;width:calc(100vw - 32px);">' +
+            '<div class="modal-header">' +
+                '<div class="modal-title">' +
+                    '<i class="fa-solid fa-calculator"></i> Calculador de disparos' +
+                '</div>' +
+                '<button class="btn btn-ghost" data-act="close" type="button" title="Cerrar">&times;</button>' +
+            '</div>' +
+            '<div class="modal-body">' +
+                '<div class="form-row form-row-3">' +
+                    '<div class="form-group"><label for="dspCalcMes">Mes</label>' +
+                        '<input id="dspCalcMes" type="month" value="' + e(mesActual) + '"></div>' +
+                    '<div class="form-group"><label for="dspCalcGuardia">Guardia</label>' +
+                        '<select id="dspCalcGuardia"><option value="">Todas</option>' + optsGuardia + '</select></div>' +
+                    '<div class="form-group"><label for="dspCalcPrecio">Valor por disparo ($)</label>' +
+                        '<input id="dspCalcPrecio" type="number" min="0" step="1" inputmode="numeric" value="1000"></div>' +
+                '</div>' +
+                '<div id="dspCalcResumen" class="alert alert-info" style="margin-bottom:12px;">' +
+                    'Seleccioná un mes y, opcionalmente, una guardia para ver el cálculo.' +
+                '</div>' +
+                '<div class="table-card" style="max-height:380px;overflow:auto;">' +
+                    '<table><thead><tr>' +
+                        '<th>Código</th><th>Fecha</th><th>Modo</th><th>Comunidad</th><th>Casa</th>' +
+                        '<th>Guardia</th><th>Espera</th><th>Factor</th>' +
+                        '<th style="text-align:right;">Valor</th>' +
+                    '</tr></thead><tbody id="dspCalcTbody">' +
+                        '<tr><td colspan="9" class="table-empty">— Sin resultados —</td></tr>' +
+                    '</tbody></table>' +
+                '</div>' +
+            '</div>' +
+            '<div class="modal-footer" style="justify-content:space-between;">' +
+                '<div id="dspCalcTotal" style="font-weight:700;font-size:1.05rem;">Total: $0</div>' +
+                '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+            '</div>' +
+        '</div></div>';
+    }
+
+    function formatearPesos(n) {
+        try {
+            return '$' + new Intl.NumberFormat('es-AR', { maximumFractionDigits: 0 }).format(n);
+        } catch (err) {
+            return '$' + Math.round(n);
+        }
+    }
+
+    // Multiplicador por tiempo de espera (segundos).
+    //   00–10 → 2.0   10–20 → 1.8   20–30 → 1.6   30–40 → 1.4   40–50 → 1.2
+    //   50–60 → 1.0   60–70 → 0.9   70–80 → 0.8   80–90 → 0.7   90–100 → 0.6
+    //   100–110 → 0.5     ≥110 → 0   (no aplica)
+    // Devuelve `null` si no hay espera registrada.
+    function disparoFactor(espera) {
+        if (espera == null || espera === '') return null;
+        var s = parseFloat(espera);
+        if (!isFinite(s) || s < 0) return null;
+        var tabla = [2.0, 1.8, 1.6, 1.4, 1.2, 1.0, 0.9, 0.8, 0.7, 0.6, 0.5];
+        var bucket = Math.floor(s / 10);
+        return bucket < tabla.length ? tabla[bucket] : 0;
+    }
+
+    function actualizarBadgeFiltrosDisparos() {
+        var btn = document.getElementById('dspFiltros');
+        if (!btn) return;
+        var badge = btn.querySelector('.btn-icon-badge');
+        var n = disparosFiltrosActivos();
+        btn.classList.toggle('active', n > 0);
+        if (badge) {
+            badge.textContent = n || '';
+            badge.style.display = n ? '' : 'none';
+        }
+    }
+
+    // Mapeo `disparos.estado` → clase de badge para colorear la columna `Modo`.
+    // A = atendido (verde), P = pendiente (rojo), C = cerrado (gris).
+    function disparoBadgeClase(estado) {
+        switch (String(estado || '').toUpperCase()) {
+            case 'A': return 'badge-success';
+            case 'P': return 'badge-danger';
+            case 'C': return 'badge-muted';
+            default:  return 'badge-info';
+        }
+    }
+
+    function renderFilasDisparos(disparos) {
+        if (!disparos.length) {
+            return '<tr><td colspan="10" class="table-empty">No hay disparos cargados.</td></tr>';
+        }
+        return disparos.map(function (d) {
+            var busq = String((d.modo || '') + ' ' + (d.comunidad_nombre || '') + ' ' + (d.casa_nombre || '') + ' ' + (d.resultado || '') + ' ' + (d.guardia_nombre || '') + ' ' + (d.estado_texto || '')).toLowerCase().trim();
+            var cerrado = d.cerrado
+                ? '<span class="badge badge-success">' + e(abmFecha(d.cerrado)) + '</span>'
+                : '<span class="badge badge-warn">Abierto</span>';
+            var espera = (d.espera != null && d.espera !== '') ? (e(String(d.espera)) + ' s') : '—';
+            var modo = d.modo
+                ? '<span class="badge ' + disparoBadgeClase(d.estado) + '">' + e(d.modo) + '</span>'
+                : '—';
+            var estadoTxt = d.estado_texto || d.estado || '—';
+            return '<tr data-id="' + d.id + '" data-search="' + e(busq) + '" style="cursor:pointer;">' +
+                '<td class="td-id">#' + d.id + '</td>' +
+                '<td>' + modo + '</td>' +
+                '<td>' + e(abmFecha(d.fecha) || '—') + '</td>' +
+                '<td>' + e(d.comunidad_nombre || '—') + '</td>' +
+                '<td>' + e(d.casa_nombre || '—') + '</td>' +
+                '<td>' + e(d.resultado || '—') + '</td>' +
+                '<td>' + cerrado + '</td>' +
+                '<td>' + espera + '</td>' +
+                '<td>' + e(estadoTxt) + '</td>' +
+                '<td style="text-align:center;">' +
+                    '<div class="actions" style="justify-content:center;">' +
+                        '<button class="btn-icon-sm" data-act="menu" type="button" title="Más acciones">' +
+                            '<i class="fa-solid fa-bars"></i>' +
+                        '</button>' +
+                    '</div>' +
+                '</td>' +
+            '</tr>';
+        }).join('');
+    }
+
+    function ctxMenuDisparosHtml() {
+        return '<div id="dspCtxMenu" class="ctx-menu" role="menu">' +
+            '<button type="button" data-action="consultar" role="menuitem">' +
+                '<i class="fa-solid fa-eye"></i><span>Consultar</span>' +
+            '</button>' +
+            '<div class="ctx-menu-sep"></div>' +
+            '<button type="button" data-action="editar" role="menuitem">' +
+                '<i class="fa-solid fa-pen"></i><span>Editar</span>' +
+            '</button>' +
+            '<button type="button" data-action="eliminar" class="ctx-menu-danger" role="menuitem">' +
+                '<i class="fa-solid fa-trash"></i><span>Eliminar</span>' +
+            '</button>' +
+        '</div>';
+    }
+
+    function modalDisparoHtml(comunidades, casas, guardias) {
+        var optsCom = comunidades.map(function (c) {
+            return '<option value="' + c.id + '">' + e(c.nombre) + '</option>';
+        }).join('');
+        var optsCasa = casas.map(function (c) {
+            return '<option value="' + c.id + '" data-comunidad="' + (c.comunidad || '') + '">' + e(c.nombre) + '</option>';
+        }).join('');
+        var optsGuardia = guardias.map(function (g) {
+            return '<option value="' + g.id + '">' + e(g.nombre || ('#' + g.id)) + '</option>';
+        }).join('');
+
+        return '<div class="modal-backdrop" id="dspModal"><div class="modal">' +
+            '<div class="modal-header">' +
+                '<div class="modal-title">' +
+                    '<span id="dspModalTitulo">Nuevo disparo</span>' +
+                    '<span class="modal-subtitle" id="dspModalSub"></span>' +
+                '</div>' +
+                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+            '</div>' +
+            '<form id="dspForm" novalidate>' +
+                '<input type="hidden" id="dspId" value="">' +
+                '<div class="modal-body">' +
+                    '<div class="alert alert-error" id="dspError" style="display:none;"></div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="dsp-fecha">Fecha</label>' +
+                            '<input id="dsp-fecha" name="fecha" type="datetime-local"></div>' +
+                        '<div class="form-group"><label for="dsp-modo">Modo</label>' +
+                            '<input id="dsp-modo" name="modo" type="text" maxlength="255" placeholder="Pánico, prueba, etc."></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="dsp-comunidad">Comunidad</label>' +
+                            '<select id="dsp-comunidad" name="comunidad">' +
+                                '<option value="">— Sin comunidad —</option>' + optsCom +
+                            '</select></div>' +
+                        '<div class="form-group"><label for="dsp-casa">Casa</label>' +
+                            '<select id="dsp-casa" name="casa">' +
+                                '<option value="">— Sin casa —</option>' + optsCasa +
+                            '</select></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="dsp-usuario">Usuario (ID)</label>' +
+                            '<input id="dsp-usuario" name="usuario" type="number" min="1" step="1" inputmode="numeric"></div>' +
+                        '<div class="form-group"><label for="dsp-guardia">Guardia</label>' +
+                            '<select id="dsp-guardia" name="guardia">' +
+                                '<option value="">— Sin guardia —</option>' + optsGuardia +
+                            '</select></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group" style="flex:1 1 100%;"><label for="dsp-ubicacion">Ubicación</label>' +
+                            '<input id="dsp-ubicacion" name="ubicacion" type="text" maxlength="255" placeholder="Coordenadas o descripción"></div>' +
+                    '</div>' +
+                    '<div class="form-row form-row-3">' +
+                        '<div class="form-group"><label for="dsp-patrulla">Patrulla</label>' +
+                            '<input id="dsp-patrulla" name="patrulla" type="text" maxlength="10"></div>' +
+                        '<div class="form-group"><label for="dsp-resultado">Resultado</label>' +
+                            '<input id="dsp-resultado" name="resultado" type="text" maxlength="10"></div>' +
+                        '<div class="form-group"><label for="dsp-detalle">Detalle</label>' +
+                            '<input id="dsp-detalle" name="detalle" type="text" maxlength="10"></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group" style="flex:1 1 100%;"><label for="dsp-comentario">Comentario</label>' +
+                            '<input id="dsp-comentario" name="comentario" type="text" maxlength="255"></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="dsp-procesado">Procesado</label>' +
+                            '<input id="dsp-procesado" name="procesado" type="datetime-local"></div>' +
+                        '<div class="form-group"><label for="dsp-tomado">Tomado</label>' +
+                            '<input id="dsp-tomado" name="tomado" type="datetime-local"></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="dsp-cerrado">Cerrado</label>' +
+                            '<input id="dsp-cerrado" name="cerrado" type="datetime-local"></div>' +
+                        '<div class="form-group"><label for="dsp-espera">Espera (segundos)</label>' +
+                            '<input id="dsp-espera" name="espera" type="number" min="0" step="1" inputmode="numeric"></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="dsp-reportado">Reportado</label>' +
+                            '<input id="dsp-reportado" name="reportado" type="text" maxlength="1" placeholder="S/N"></div>' +
+                        '<div class="form-group"><label for="dsp-estado">Estado</label>' +
+                            '<input id="dsp-estado" name="estado" type="text" maxlength="1" placeholder="1 carácter"></div>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="modal-footer">' +
+                    '<button type="button" class="btn btn-ghost" data-act="close">Cancelar</button>' +
+                    '<button type="submit" class="btn btn-primary" id="dspGuardar">Guardar</button>' +
+                '</div>' +
+            '</form>' +
+        '</div></div>';
+    }
+
+    function modalFiltrosDisparosHtml(comunidades, casas, guardias) {
+        var optsCom = comunidades.map(function (c) {
+            return '<option value="' + c.id + '">' + e(c.nombre) + '</option>';
+        }).join('');
+        var optsCasa = casas.map(function (c) {
+            return '<option value="' + c.id + '">' + e(c.nombre) + '</option>';
+        }).join('');
+        var optsGuardia = guardias.map(function (g) {
+            return '<option value="' + g.id + '">' + e(g.nombre || ('#' + g.id)) + '</option>';
+        }).join('');
+
+        return '<div class="modal-backdrop" id="dspFiltrosModal"><div class="modal" style="max-width:560px;">' +
+            '<div class="modal-header">' +
+                '<div class="modal-title"><i class="fa-solid fa-filter"></i> Filtros</div>' +
+                '<button class="btn btn-ghost" data-act="cerrar" type="button" title="Cerrar">&times;</button>' +
+            '</div>' +
+            '<div class="modal-body">' +
+                '<div class="form-row">' +
+                    '<div class="form-group"><label for="dflt-id">Código</label>' +
+                        '<input id="dflt-id" type="number" min="1" step="1" inputmode="numeric" placeholder="ID del disparo…"></div>' +
+                    '<div class="form-group"><label for="dflt-comunidad">Comunidad</label>' +
+                        '<select id="dflt-comunidad"><option value="">Todas</option>' + optsCom + '</select></div>' +
+                '</div>' +
+                '<div class="form-row">' +
+                    '<div class="form-group"><label for="dflt-casa">Casa</label>' +
+                        '<select id="dflt-casa"><option value="">Todas</option>' + optsCasa + '</select></div>' +
+                    '<div class="form-group"><label for="dflt-guardia">Guardia</label>' +
+                        '<select id="dflt-guardia"><option value="">Todas</option>' + optsGuardia + '</select></div>' +
+                '</div>' +
+                '<div class="form-group">' +
+                    '<label>Estado del registro</label>' +
+                    '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+                        '<button type="button" class="filter-chip" data-chip="cerrado" data-value=""  >Todos</button>' +
+                        '<button type="button" class="filter-chip" data-chip="cerrado" data-value="no">Abiertos</button>' +
+                        '<button type="button" class="filter-chip" data-chip="cerrado" data-value="si">Cerrados</button>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="form-row">' +
+                    '<div class="form-group"><label for="dflt-desde">Desde</label>' +
+                        '<input id="dflt-desde" type="date"></div>' +
+                    '<div class="form-group"><label for="dflt-hasta">Hasta</label>' +
+                        '<input id="dflt-hasta" type="date"></div>' +
+                '</div>' +
+                '<div class="form-group"><label for="dflt-estado">Estado (código)</label>' +
+                    '<input id="dflt-estado" type="text" maxlength="1" placeholder="1 carácter"></div>' +
+                '<div class="form-row form-row-3">' +
+                    '<div class="form-group"><label for="dflt-limit">Límite</label>' +
+                        '<input id="dflt-limit" type="number" min="1" max="1000" step="1" inputmode="numeric"></div>' +
+                    '<div class="form-group"><label for="dflt-sort">Ordenar por</label>' +
+                        '<select id="dflt-sort">' +
+                            '<option value="id">Código</option>' +
+                            '<option value="fecha">Fecha</option>' +
+                            '<option value="comunidad">Comunidad</option>' +
+                            '<option value="casa">Casa</option>' +
+                            '<option value="cerrado">Cierre</option>' +
+                            '<option value="espera">Espera</option>' +
+                            '<option value="estado">Estado</option>' +
+                        '</select></div>' +
+                    '<div class="form-group"><label for="dflt-dir">Dirección</label>' +
+                        '<select id="dflt-dir">' +
+                            '<option value="desc">Descendente</option>' +
+                            '<option value="asc">Ascendente</option>' +
+                        '</select></div>' +
+                '</div>' +
+            '</div>' +
+            '<div class="modal-footer">' +
+                '<button type="button" class="btn btn-ghost"   data-act="cerrar"  >Cerrar</button>' +
+                '<button type="button" class="btn btn-ghost"   data-act="limpiar" >Limpiar</button>' +
+                '<button type="button" class="btn btn-primary" data-act="aplicar" >Aplicar</button>' +
+            '</div>' +
+        '</div></div>';
+    }
+
+    function modalConsultarDisparoHtml() {
+        return '<div class="modal-backdrop" id="dspConsultar"><div class="modal">' +
+            '<div class="modal-header">' +
+                '<div class="modal-title">' +
+                    '<span>Consultar disparo</span>' +
+                    '<span class="modal-subtitle" id="dspConsultarSub"></span>' +
+                '</div>' +
+                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+            '</div>' +
+            '<div class="modal-body">' +
+                '<dl class="data-list" id="dspConsultarBody"></dl>' +
+            '</div>' +
+            '<div class="modal-footer">' +
+                '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+                '<button type="button" class="btn btn-primary" id="dspConsultarEditar">' +
+                    '<i class="fa-solid fa-pen"></i> Editar' +
+                '</button>' +
+            '</div>' +
+        '</div></div>';
+    }
+
+    function confirmDeleteDisparoHtml() {
+        return '<div class="confirm-backdrop" id="dspConfirm"><div class="confirm-box">' +
+            '<div class="confirm-title">Eliminar disparo</div>' +
+            '<div class="confirm-msg" id="dspConfirmMsg">Esta acción no se puede deshacer.</div>' +
+            '<div class="confirm-actions">' +
+                '<button class="btn btn-ghost"  data-act="cancel" type="button">Cancelar</button>' +
+                '<button class="btn btn-danger" id="dspConfirmBtn" type="button">Eliminar</button>' +
+            '</div>' +
+        '</div></div>';
+    }
+
+    function dtLocal(v) {
+        if (!v) return '';
+        // YYYY-MM-DD HH:MM:SS -> YYYY-MM-DDTHH:MM (input datetime-local)
+        var s = String(v).replace(' ', 'T');
+        return s.length >= 16 ? s.substring(0, 16) : s;
+    }
+
+    async function recargarDisparosLista() {
+        try {
+            var data = await api('/api/disparos.php' + disparosQueryString());
+            var disparos = data.disparos || [];
+            var kpis     = data.kpis     || {};
+            var stats = document.getElementById('dspStats');
+            var tbody = document.getElementById('dspTbody');
+            var count = document.getElementById('dspCount');
+            if (stats) stats.innerHTML = renderDisparosStats(kpis);
+            if (tbody) tbody.innerHTML = renderFilasDisparos(disparos);
+            if (count) count.textContent = disparosCountText(disparos.length);
+            disparosRegistroCache = {};
+            actualizarBadgeFiltrosDisparos();
+            var searchInput = document.getElementById('dspSearch');
+            if (searchInput) searchInput.dispatchEvent(new Event('input'));
+        } catch (err) {
+            toast(err.message, true);
+        }
+    }
+
+    function wireDisparosView() {
+        var tbody       = document.getElementById('dspTbody');
+        var emptyState  = document.getElementById('dspEmpty');
+        var searchInput = document.getElementById('dspSearch');
+        var searchClear = document.getElementById('dspSearchClear');
+
+        var modal       = document.getElementById('dspModal');
+        var modalTitulo = document.getElementById('dspModalTitulo');
+        var modalSub    = document.getElementById('dspModalSub');
+        var modalError  = document.getElementById('dspError');
+        var form        = document.getElementById('dspForm');
+        var fId         = document.getElementById('dspId');
+        var btnGuardar  = document.getElementById('dspGuardar');
+
+        var confirmBox = document.getElementById('dspConfirm');
+        var confirmMsg = document.getElementById('dspConfirmMsg');
+        var btnDelete  = document.getElementById('dspConfirmBtn');
+
+        var filtrosModal = document.getElementById('dspFiltrosModal');
+
+        var consultarModal  = document.getElementById('dspConsultar');
+        var consultarSub    = document.getElementById('dspConsultarSub');
+        var consultarBody   = document.getElementById('dspConsultarBody');
+        var consultarEditar = document.getElementById('dspConsultarEditar');
+
+        var ctxMenu = document.getElementById('dspCtxMenu');
+        var ctxId   = null;
+
+        var toolbarMenu = document.getElementById('dspToolbarCtxMenu');
+
+        var pendingDeleteId = null;
+        var modoEdicion     = false;
+        var consultarIdActual = null;
+
+        // --- Búsqueda rápida cliente ------------------------------------
+        function applyClientFilter() {
+            var q = searchInput.value.trim().toLowerCase();
+            var visibles = 0;
+            tbody.querySelectorAll('tr[data-id]').forEach(function (tr) {
+                var haystack = tr.dataset.search || '';
+                var show = !q || haystack.indexOf(q) !== -1;
+                tr.style.display = show ? '' : 'none';
+                if (show) visibles++;
+            });
+            emptyState.style.display = (visibles === 0 && tbody.querySelector('tr[data-id]')) ? '' : 'none';
+            searchClear.style.display = q ? '' : 'none';
+        }
+        searchInput.addEventListener('input', applyClientFilter);
+        searchClear.addEventListener('click', function () {
+            searchInput.value = '';
+            applyClientFilter();
+            searchInput.focus();
+        });
+
+        // --- Refrescar ---------------------------------------------------
+        document.getElementById('dspRefrescar').addEventListener('click', function () {
+            recargarDisparosLista();
+        });
+
+        // --- Modal de filtros (live apply + snapshot) -------------------
+        var fId_     = document.getElementById('dflt-id');
+        var fCom     = document.getElementById('dflt-comunidad');
+        var fCasa    = document.getElementById('dflt-casa');
+        var fGuard   = document.getElementById('dflt-guardia');
+        var fEstado  = document.getElementById('dflt-estado');
+        var fDesde   = document.getElementById('dflt-desde');
+        var fHasta   = document.getElementById('dflt-hasta');
+        var fLimit   = document.getElementById('dflt-limit');
+        var fSort    = document.getElementById('dflt-sort');
+        var fDir     = document.getElementById('dflt-dir');
+        var fChips   = filtrosModal.querySelectorAll('.filter-chip[data-chip="cerrado"]');
+
+        function sincronizarControlesFiltros() {
+            fId_.value    = disparosFiltros.filtro_id;
+            fCom.value    = disparosFiltros.comunidad;
+            fCasa.value   = disparosFiltros.casa;
+            fGuard.value  = disparosFiltros.guardia;
+            fEstado.value = disparosFiltros.estado;
+            fDesde.value  = disparosFiltros.desde;
+            fHasta.value  = disparosFiltros.hasta;
+            fLimit.value  = disparosFiltros.limit;
+            fSort.value   = disparosFiltros.sort;
+            fDir.value    = disparosFiltros.dir;
+            fChips.forEach(function (c) {
+                c.classList.toggle('active', c.dataset.value === String(disparosFiltros.cerrado || ''));
+            });
+        }
+        function abrirModalFiltros() {
+            disparosFiltrosSnapshot = Object.assign({}, disparosFiltros);
+            sincronizarControlesFiltros();
+            filtrosModal.classList.add('open');
+        }
+        function cerrarModalFiltros() { filtrosModal.classList.remove('open'); }
+        function cancelarFiltros() {
+            if (disparosFiltrosSnapshot) {
+                Object.keys(disparosFiltrosSnapshot).forEach(function (k) {
+                    disparosFiltros[k] = disparosFiltrosSnapshot[k];
+                });
+                disparosFiltrosSnapshot = null;
+                recargarDisparosLista();
+            }
+            cerrarModalFiltros();
+        }
+        function limpiarFiltros() {
+            Object.assign(disparosFiltros, disparosFiltrosDefault);
+            sincronizarControlesFiltros();
+            recargarDisparosLista();
+        }
+
+        document.getElementById('dspFiltros').addEventListener('click', abrirModalFiltros);
+        filtrosModal.addEventListener('click', function (ev) {
+            if (ev.target === filtrosModal) { cancelarFiltros(); return; }
+            var b = ev.target.closest('button[data-act]');
+            if (!b) return;
+            if (b.dataset.act === 'cerrar')   cancelarFiltros();
+            if (b.dataset.act === 'limpiar')  limpiarFiltros();
+            if (b.dataset.act === 'aplicar')  { disparosFiltrosSnapshot = null; cerrarModalFiltros(); }
+        });
+
+        // Live apply en cada cambio de control.
+        function liveApply(field, valueGetter) {
+            return function () {
+                disparosFiltros[field] = valueGetter();
+                recargarDisparosLista();
+            };
+        }
+        fId_.addEventListener('input',   liveApply('filtro_id', function () { return fId_.value.trim(); }));
+        fCom.addEventListener('change',  liveApply('comunidad', function () { return fCom.value; }));
+        fCasa.addEventListener('change', liveApply('casa',      function () { return fCasa.value; }));
+        fGuard.addEventListener('change',liveApply('guardia',   function () { return fGuard.value; }));
+        fEstado.addEventListener('input',liveApply('estado',    function () { return fEstado.value.trim(); }));
+        fDesde.addEventListener('change',liveApply('desde',     function () { return fDesde.value; }));
+        fHasta.addEventListener('change',liveApply('hasta',     function () { return fHasta.value; }));
+        fLimit.addEventListener('change',liveApply('limit',     function () { return parseInt(fLimit.value, 10) || 100; }));
+        fSort.addEventListener('change', liveApply('sort',      function () { return fSort.value || 'id'; }));
+        fDir.addEventListener('change',  liveApply('dir',       function () { return fDir.value  || 'desc'; }));
+        fChips.forEach(function (chip) {
+            chip.addEventListener('click', function () {
+                disparosFiltros.cerrado = chip.dataset.value;
+                fChips.forEach(function (c) { c.classList.toggle('active', c === chip); });
+                recargarDisparosLista();
+            });
+        });
+
+        // --- Menú contextual de fila -----------------------------------
+        function cerrarCtxMenu() {
+            ctxMenu.classList.remove('open');
+            ctxId = null;
+        }
+        function abrirCtxMenu(x, y, id) {
+            ctxId = id;
+            ctxMenu.classList.add('open');
+            // Reposicionar para no salirse del viewport.
+            var rect = ctxMenu.getBoundingClientRect();
+            var w = rect.width, h = rect.height;
+            var vw = window.innerWidth, vh = window.innerHeight;
+            var left = Math.min(x, vw - w - 8);
+            var top  = Math.min(y, vh - h - 8);
+            ctxMenu.style.left = Math.max(8, left) + 'px';
+            ctxMenu.style.top  = Math.max(8, top)  + 'px';
+        }
+        ctxMenu.addEventListener('click', function (ev) {
+            var b = ev.target.closest('button[data-action]');
+            if (!b || ctxId == null) return;
+            var id = ctxId;
+            cerrarCtxMenu();
+            if (b.dataset.action === 'consultar') abrirConsulta(id);
+            else if (b.dataset.action === 'editar')    abrirEdicion(id);
+            else if (b.dataset.action === 'eliminar')  pedirEliminar(id);
+        });
+
+        // --- Menú contextual de la toolbar (botón hamburguesa) ---------
+        function cerrarToolbarMenu() { toolbarMenu.classList.remove('open'); }
+        function abrirToolbarMenu(x, y) {
+            toolbarMenu.classList.add('open');
+            var rect = toolbarMenu.getBoundingClientRect();
+            var w = rect.width, h = rect.height;
+            var vw = window.innerWidth, vh = window.innerHeight;
+            toolbarMenu.style.left = Math.max(8, Math.min(x, vw - w - 8)) + 'px';
+            toolbarMenu.style.top  = Math.max(8, Math.min(y, vh - h - 8)) + 'px';
+        }
+        document.getElementById('dspMenuToolbar').addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            if (toolbarMenu.classList.contains('open')) { cerrarToolbarMenu(); return; }
+            var rect = this.getBoundingClientRect();
+            abrirToolbarMenu(rect.left, rect.bottom + 4);
+        });
+        toolbarMenu.addEventListener('click', function (ev) {
+            var b = ev.target.closest('button[data-action]');
+            if (!b) return;
+            cerrarToolbarMenu();
+            if (b.dataset.action === 'calculador') {
+                abrirCalculador();
+            }
+        });
+
+        // --- Modal Calculador -----------------------------------------
+        var calcModal   = document.getElementById('dspCalcModal');
+        var calcMes     = document.getElementById('dspCalcMes');
+        var calcGuardia = document.getElementById('dspCalcGuardia');
+        var calcPrecio  = document.getElementById('dspCalcPrecio');
+        var calcResumen = document.getElementById('dspCalcResumen');
+        var calcTbody   = document.getElementById('dspCalcTbody');
+        var calcTotal   = document.getElementById('dspCalcTotal');
+        var calcSeq     = 0;
+        var calcTimer   = null;
+
+        calcModal.addEventListener('click', function (ev) {
+            if (ev.target === calcModal || ev.target.closest('[data-act="close"]')) {
+                calcModal.classList.remove('open');
+            }
+        });
+
+        function abrirCalculador() {
+            calcModal.classList.add('open');
+            recalcular();
+        }
+        function programarRecalculo() {
+            if (calcTimer) clearTimeout(calcTimer);
+            calcTimer = setTimeout(recalcular, 250);
+        }
+        calcMes.addEventListener('input',     programarRecalculo);
+        calcGuardia.addEventListener('change', recalcular);
+        calcPrecio.addEventListener('input',  programarRecalculo);
+
+        async function recalcular() {
+            var mes = (calcMes.value || '').trim();
+            if (!/^\d{4}-\d{2}$/.test(mes)) {
+                calcResumen.className   = 'alert alert-info';
+                calcResumen.textContent = 'Seleccioná un mes válido (formato YYYY-MM).';
+                calcTbody.innerHTML     = '<tr><td colspan="6" class="table-empty">— Sin resultados —</td></tr>';
+                calcTotal.textContent   = 'Total: $0';
+                return;
+            }
+            var precio = parseFloat(calcPrecio.value);
+            if (!isFinite(precio) || precio < 0) precio = 0;
+
+            // Rango del mes.
+            var partes = mes.split('-');
+            var y = parseInt(partes[0], 10);
+            var m = parseInt(partes[1], 10);
+            var desde = mes + '-01';
+            // Último día del mes: día 0 del mes siguiente.
+            var ultimo = new Date(Date.UTC(y, m, 0)).getUTCDate();
+            var hasta  = mes + '-' + (ultimo < 10 ? '0' + ultimo : ultimo);
+
+            var qs = ['desde=' + encodeURIComponent(desde),
+                      'hasta=' + encodeURIComponent(hasta),
+                      'limit=10000', 'sort=id', 'dir=desc'];
+            if (calcGuardia.value) qs.push('guardia=' + encodeURIComponent(calcGuardia.value));
+
+            var seq = ++calcSeq;
+            calcResumen.className   = 'alert alert-info';
+            calcResumen.textContent = 'Calculando…';
+            calcTbody.innerHTML     = '<tr><td colspan="6" class="table-empty">Cargando…</td></tr>';
+
+            try {
+                var data = await api('/api/disparos.php?' + qs.join('&'));
+                if (seq !== calcSeq) return; // hay otro pedido más nuevo en curso
+                var lista = data.disparos || [];
+                var n = lista.length;
+                var total = 0;
+
+                var nombreGuardia = '';
+                if (calcGuardia.value) {
+                    var sel = calcGuardia.options[calcGuardia.selectedIndex];
+                    nombreGuardia = sel ? sel.textContent : '';
+                }
+                calcResumen.className   = 'alert alert-success';
+                calcResumen.textContent = n + ' disparo(s) en ' + mes +
+                    (nombreGuardia ? ' · Guardia: ' + nombreGuardia : ' · Todas las guardias') +
+                    ' · Base ' + formatearPesos(precio) + ' c/u × factor por espera';
+
+                if (!n) {
+                    calcTbody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay disparos para este filtro.</td></tr>';
+                } else {
+                    calcTbody.innerHTML = lista.map(function (d) {
+                        var esperaTxt = (d.espera != null && d.espera !== '') ? (e(String(d.espera)) + ' s') : '—';
+                        var factor    = disparoFactor(d.espera);
+                        var factorTxt = factor != null ? (factor.toFixed(1) + 'x') : '—';
+                        var valor     = factor != null ? precio * factor : 0;
+                        total += valor;
+                        return '<tr>' +
+                            '<td class="td-id">#' + d.id + '</td>' +
+                            '<td>' + e(abmFecha(d.fecha) || '—') + '</td>' +
+                            '<td>' + e(d.modo || '—') + '</td>' +
+                            '<td>' + e(d.comunidad_nombre || '—') + '</td>' +
+                            '<td>' + e(d.casa_nombre || '—') + '</td>' +
+                            '<td>' + e(d.guardia_nombre || '—') + '</td>' +
+                            '<td>' + esperaTxt + '</td>' +
+                            '<td>' + factorTxt + '</td>' +
+                            '<td style="text-align:right;">' + (factor != null ? formatearPesos(valor) : '—') + '</td>' +
+                        '</tr>';
+                    }).join('');
+                }
+                calcTotal.textContent = 'Total: ' + formatearPesos(total);
+            } catch (err) {
+                if (seq !== calcSeq) return;
+                calcResumen.className   = 'alert alert-error';
+                calcResumen.textContent = err.message;
+                calcTbody.innerHTML     = '<tr><td colspan="9" class="table-empty">—</td></tr>';
+                calcTotal.textContent   = 'Total: $0';
+            }
+        }
+
+        // Cierre global para AMBOS menús contextuales.
+        document.addEventListener('click', function (ev) {
+            if (ctxMenu.classList.contains('open')     && !ctxMenu.contains(ev.target))     cerrarCtxMenu();
+            if (toolbarMenu.classList.contains('open') && !toolbarMenu.contains(ev.target)) cerrarToolbarMenu();
+        });
+        document.addEventListener('scroll',  function () { cerrarCtxMenu(); cerrarToolbarMenu(); }, true);
+        window.addEventListener('resize',    function () { cerrarCtxMenu(); cerrarToolbarMenu(); });
+        document.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Escape') { cerrarCtxMenu(); cerrarToolbarMenu(); }
+        });
+
+        // --- Filas: clic = Consultar, click derecho = ctx menu ---------
+        tbody.addEventListener('click', function (ev) {
+            var tr = ev.target.closest('tr[data-id]');
+            if (!tr) return;
+            var id = parseInt(tr.dataset.id, 10);
+            var btn = ev.target.closest('button[data-act="menu"]');
+            if (btn) {
+                ev.stopPropagation();
+                var rect = btn.getBoundingClientRect();
+                abrirCtxMenu(rect.right - 200, rect.bottom + 4, id);
+                return;
+            }
+            // Ignorar clics sobre elementos interactivos dentro de la fila.
+            if (ev.target.closest('a,input,select,button')) return;
+            abrirConsulta(id);
+        });
+        tbody.addEventListener('contextmenu', function (ev) {
+            var tr = ev.target.closest('tr[data-id]');
+            if (!tr) return;
+            ev.preventDefault();
+            var id = parseInt(tr.dataset.id, 10);
+            abrirCtxMenu(ev.clientX, ev.clientY, id);
+        });
+
+        // --- Modal Consultar -------------------------------------------
+        consultarModal.addEventListener('click', function (ev) {
+            if (ev.target === consultarModal || ev.target.closest('[data-act="close"]')) {
+                consultarModal.classList.remove('open');
+            }
+        });
+        consultarEditar.addEventListener('click', function () {
+            if (consultarIdActual == null) return;
+            consultarModal.classList.remove('open');
+            abrirEdicion(consultarIdActual);
+        });
+
+        async function abrirConsulta(id) {
+            consultarIdActual = id;
+            consultarSub.innerHTML  = '<code>#' + id + '</code>';
+            consultarBody.innerHTML = '<div style="display:flex;justify-content:center;padding:24px"><div class="spin"></div></div>';
+            consultarModal.classList.add('open');
+
+            var d;
+            try {
+                d = disparosRegistroCache[id] || (disparosRegistroCache[id] = await api('/api/disparos.php?id=' + id));
+            } catch (err) {
+                consultarBody.innerHTML = '<div class="alert alert-error">' + e(err.message) + '</div>';
+                return;
+            }
+
+            var cierreBadge = d.cerrado
+                ? '<span class="badge badge-success">' + e(abmFecha(d.cerrado)) + '</span>'
+                : '<span class="badge badge-warn">Abierto</span>';
+            var esperaTxt = (d.espera != null && d.espera !== '') ? (d.espera + ' s') : null;
+
+            var modoBadge = d.modo
+                ? '<span class="badge ' + disparoBadgeClase(d.estado) + '">' + e(d.modo) + '</span>'
+                : null;
+
+            consultarSub.innerHTML  = '<code>#' + d.id + '</code>';
+            consultarBody.innerHTML =
+                abmRow    ('Código',          '<code>#' + d.id + '</code>') +
+                (modoBadge
+                    ? abmRow ('Modo',         modoBadge)
+                    : abmRowTxt('Modo',       d.modo, 'Sin modo')) +
+                abmRowTxt ('Fecha',           abmFecha(d.fecha),     'Sin fecha') +
+                abmRowRef ('Comunidad',       d.comunidad, d.comunidad_nombre, 'Sin comunidad') +
+                abmRowRef ('Casa',            d.casa,      d.casa_nombre,      'Sin casa') +
+                abmRowRef ('Usuario',         d.usuario,   d.usuario_nombre,   'Sin usuario') +
+                abmRowTxt ('Ubicación',       d.ubicacion, 'Sin ubicación', true) +
+                abmRowTxt ('Procesado',       abmFecha(d.procesado), 'No procesado') +
+                abmRowTxt ('Tomado',          abmFecha(d.tomado),    'No tomado') +
+                abmRowRef ('Guardia',         d.guardia,   d.guardia_nombre, 'Sin guardia') +
+                abmRowTxt ('Patrulla',        d.patrulla,  'Sin patrulla') +
+                abmRowTxt ('Resultado',       d.resultado, 'Sin resultado') +
+                abmRowTxt ('Detalle',         d.detalle,   'Sin detalle') +
+                abmRowTxt ('Comentario',      d.comentario, 'Sin comentario', true) +
+                abmRow    ('Cierre',          cierreBadge) +
+                abmRowTxt ('Espera',          esperaTxt,   'Sin espera') +
+                abmRowTxt ('Reportado',       d.reportado, 'Sin reportar') +
+                abmRowTxt ('Estado',          d.estado_texto || d.estado, 'Sin estado');
+        }
+
+        // --- Modal Alta / Edición --------------------------------------
+        function resetForm() { form.reset(); fId.value = ''; }
+        function openModal()  { modal.classList.add('open'); }
+        function closeModal() {
+            modal.classList.remove('open');
+            modalError.style.display = 'none';
+            modalError.textContent = '';
+        }
+        function showFormError(msg) {
+            modalError.textContent = msg;
+            modalError.style.display = '';
+        }
+        modal.addEventListener('click', function (ev) {
+            if (ev.target === modal || ev.target.closest('[data-act="close"]')) closeModal();
+        });
+
+        document.getElementById('dspNuevo').addEventListener('click', function () {
+            modoEdicion = false;
+            resetForm();
+            modalTitulo.textContent = 'Nuevo disparo';
+            modalSub.textContent    = '';
+            var now = new Date();
+            var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+            document.getElementById('dsp-fecha').value =
+                now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate()) +
+                'T' + pad(now.getHours()) + ':' + pad(now.getMinutes());
+            openModal();
+            document.getElementById('dsp-fecha').focus();
+        });
+
+        async function abrirEdicion(id) {
+            try {
+                var d = disparosRegistroCache[id] || (disparosRegistroCache[id] = await api('/api/disparos.php?id=' + id));
+                modoEdicion = true;
+                resetForm();
+                fId.value = d.id;
+                modalTitulo.textContent = 'Editar disparo';
+                modalSub.textContent    = '#' + d.id;
+                document.getElementById('dsp-fecha').value      = dtLocal(d.fecha);
+                document.getElementById('dsp-modo').value       = d.modo       || '';
+                document.getElementById('dsp-comunidad').value  = d.comunidad != null ? d.comunidad : '';
+                document.getElementById('dsp-casa').value       = d.casa      != null ? d.casa      : '';
+                document.getElementById('dsp-usuario').value    = d.usuario   != null ? d.usuario   : '';
+                document.getElementById('dsp-guardia').value    = d.guardia   != null ? d.guardia   : '';
+                document.getElementById('dsp-ubicacion').value  = d.ubicacion  || '';
+                document.getElementById('dsp-patrulla').value   = d.patrulla   || '';
+                document.getElementById('dsp-resultado').value  = d.resultado  || '';
+                document.getElementById('dsp-detalle').value    = d.detalle    || '';
+                document.getElementById('dsp-comentario').value = d.comentario || '';
+                document.getElementById('dsp-procesado').value  = dtLocal(d.procesado);
+                document.getElementById('dsp-tomado').value     = dtLocal(d.tomado);
+                document.getElementById('dsp-cerrado').value    = dtLocal(d.cerrado);
+                document.getElementById('dsp-espera').value     = d.espera   != null ? d.espera   : '';
+                document.getElementById('dsp-reportado').value  = d.reportado  || '';
+                document.getElementById('dsp-estado').value     = d.estado     || '';
+                openModal();
+                document.getElementById('dsp-fecha').focus();
+            } catch (err) {
+                toast(err.message, true);
+            }
+        }
+
+        function pedirEliminar(id) {
+            confirmMsg.textContent = '¿Eliminar el disparo #' + id + '? Esta acción no se puede deshacer.';
+            pendingDeleteId = id;
+            confirmBox.classList.add('open');
+        }
+        confirmBox.addEventListener('click', function (ev) {
+            if (ev.target === confirmBox || ev.target.closest('[data-act="cancel"]')) {
+                confirmBox.classList.remove('open');
+                pendingDeleteId = null;
+            }
+        });
+        btnDelete.addEventListener('click', async function () {
+            if (!pendingDeleteId) return;
+            btnDelete.disabled = true;
+            try {
+                await api('/api/disparos.php?id=' + pendingDeleteId, { method: 'DELETE' });
+                toast('Disparo eliminado.');
+                recargarDisparosLista();
+            } catch (err) {
+                toast(err.message, true);
+            } finally {
+                btnDelete.disabled = false;
+                confirmBox.classList.remove('open');
+                pendingDeleteId = null;
+            }
+        });
+
+        form.addEventListener('submit', async function (ev) {
+            ev.preventDefault();
+            modalError.style.display = 'none';
+
+            var payload = {
+                fecha:      document.getElementById('dsp-fecha').value,
+                modo:       document.getElementById('dsp-modo').value.trim(),
+                comunidad:  document.getElementById('dsp-comunidad').value || null,
+                casa:       document.getElementById('dsp-casa').value      || null,
+                usuario:    document.getElementById('dsp-usuario').value   || null,
+                guardia:    document.getElementById('dsp-guardia').value   || null,
+                ubicacion:  document.getElementById('dsp-ubicacion').value.trim(),
+                patrulla:   document.getElementById('dsp-patrulla').value.trim(),
+                resultado:  document.getElementById('dsp-resultado').value.trim(),
+                detalle:    document.getElementById('dsp-detalle').value.trim(),
+                comentario: document.getElementById('dsp-comentario').value.trim(),
+                procesado:  document.getElementById('dsp-procesado').value,
+                tomado:     document.getElementById('dsp-tomado').value,
+                cerrado:    document.getElementById('dsp-cerrado').value,
+                espera:     document.getElementById('dsp-espera').value,
+                reportado:  document.getElementById('dsp-reportado').value.trim(),
+                estado:     document.getElementById('dsp-estado').value.trim()
+            };
+
+            btnGuardar.disabled = true;
+            try {
+                if (modoEdicion) {
+                    await api('/api/disparos.php?id=' + encodeURIComponent(fId.value), {
+                        method: 'PUT',
+                        body:   payload
+                    });
+                    toast('Disparo actualizado.');
+                } else {
+                    await api('/api/disparos.php', {
+                        method: 'POST',
+                        body:   payload
+                    });
+                    toast('Disparo creado.');
+                }
+                closeModal();
+                recargarDisparosLista();
+            } catch (err) {
+                showFormError(err.message);
+            } finally {
+                btnGuardar.disabled = false;
+            }
+        });
+
+        applyClientFilter();
     }
 
     // -------- Vista: Señales (solo lectura) -------------------------------

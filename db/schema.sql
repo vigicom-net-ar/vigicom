@@ -1928,6 +1928,7 @@ CREATE TABLE `disparos`  (
   `detalle` varchar(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL DEFAULT NULL,
   `comentario` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL DEFAULT NULL,
   `cerrado` datetime(0) NULL DEFAULT NULL,
+  `espera` int(0) NULL DEFAULT NULL,
   `reportado` varchar(1) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL DEFAULT NULL,
   `estado` varchar(1) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL DEFAULT NULL,
   PRIMARY KEY (`id`) USING BTREE
@@ -2182,6 +2183,18 @@ CREATE TABLE `estadisticas`  (
   `destino` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL DEFAULT NULL,
   PRIMARY KEY (`id`) USING BTREE
 ) ENGINE = MyISAM AUTO_INCREMENT = 8 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
+
+-- ----------------------------
+-- Table structure for estados
+-- ----------------------------
+DROP TABLE IF EXISTS `estados`;
+CREATE TABLE `estados`  (
+  `campo` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+  `valor` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+  `texto` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL DEFAULT NULL,
+  `orden` int(0) NULL DEFAULT NULL,
+  PRIMARY KEY (`campo`, `valor`) USING BTREE
+) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = 'Catálogo de valores posibles de campos tipo enum por objeto.campo (ej. disparos.estado)' ROW_FORMAT = Dynamic;
 
 -- ----------------------------
 -- Table structure for eventos

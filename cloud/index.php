@@ -46,6 +46,19 @@ $cssBust = $version === '0.0.dev' ? (string) time() : $version;
                 </div>
             </div>
 
+            <div class="nav-group-wrap" data-group="guardia">
+                <button type="button" class="nav-item nav-group-toggle">
+                    <span class="nav-icon">🛡️</span>
+                    <span class="nav-group-label">Guardia</span>
+                    <span class="nav-group-arrow">+</span>
+                </button>
+                <div class="nav-sub">
+                    <a class="nav-item nav-sub-item" href="#/disparos" data-route="/disparos">
+                        <span class="nav-icon">🚨</span><span>Disparos</span>
+                    </a>
+                </div>
+            </div>
+
             <div class="nav-group-wrap" data-group="inventario">
                 <button type="button" class="nav-item nav-group-toggle">
                     <span class="nav-icon">📦</span>

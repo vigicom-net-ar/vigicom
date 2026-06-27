@@ -136,6 +136,7 @@ a:hover { text-decoration: underline; }
 /* ===== 7. Inputs ===== */
 input[type=text], input[type=number], input[type=url], input[type=tel],
 input[type=email], input[type=date], input[type=time], input[type=datetime-local],
+input[type=month], input[type=week],
 input[type=password], input[type=search], select, textarea {
     border: 1px solid var(--border); border-radius: var(--radius);
     padding: 8px 12px; font-size: .88rem; background: var(--surface);
@@ -593,13 +594,23 @@ tbody tr:hover { background: var(--row-hover); }
 .s3-exp-empty { padding: 30px; text-align: center; color: var(--muted); }
 
 .btn-icon {
+    position: relative;
     background: transparent; color: var(--muted);
     border: 1px solid var(--border); padding: 6px 10px;
     border-radius: var(--radius); cursor: pointer;
     font-family: inherit; font-size: .85rem;
-    transition: background .15s, color .15s;
+    transition: background .15s, color .15s, border-color .15s;
 }
-.btn-icon:hover { background: var(--bg); color: var(--text); }
+.btn-icon:hover         { background: var(--bg); color: var(--text); }
+.btn-icon.active        { border-color: var(--primary); color: var(--primary); }
+.btn-icon.active:hover  { background: var(--bg); color: var(--primary); }
+.btn-icon-badge {
+    position: absolute; top: -6px; right: -6px;
+    min-width: 16px; height: 16px; padding: 0 4px;
+    border-radius: 8px; background: #ff8c1a; color: #fff;
+    font-size: .65rem; font-weight: 700; line-height: 1;
+    display: inline-flex; align-items: center; justify-content: center;
+}
 
 /* Menú contextual flotante del explorador */
 .ctx-menu {
