@@ -30,6 +30,10 @@ body {
     background: var(--bg);
     color: var(--text);
     min-height: 100vh;
+    /* Le dice al UA del browser que use controles oscuros (date/time/month/week,
+       scrollbars, etc.). Sin esto Chrome fuerza el estilo nativo claro y la CSS
+       de fondo/borde para esos inputs queda sin efecto. */
+    color-scheme: dark;
 }
 
 a { color: var(--primary); text-decoration: none; }
@@ -150,6 +154,28 @@ input[readonly], textarea[readonly] {
     color: var(--muted); background: var(--bg); cursor: not-allowed; opacity: .75;
 }
 textarea { resize: vertical; min-height: 60px; }
+
+/* Hacer visible el icono del picker en inputs date/time/month/week sobre fondo oscuro.
+   El UA de Chrome dibuja el SVG en negro, casi invisible contra var(--surface). */
+input[type=date]::-webkit-calendar-picker-indicator,
+input[type=time]::-webkit-calendar-picker-indicator,
+input[type=datetime-local]::-webkit-calendar-picker-indicator,
+input[type=month]::-webkit-calendar-picker-indicator,
+input[type=week]::-webkit-calendar-picker-indicator {
+    filter: invert(0.85); opacity: .75; cursor: pointer;
+}
+input[type=date]::-webkit-calendar-picker-indicator:hover,
+input[type=time]::-webkit-calendar-picker-indicator:hover,
+input[type=datetime-local]::-webkit-calendar-picker-indicator:hover,
+input[type=month]::-webkit-calendar-picker-indicator:hover,
+input[type=week]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
+
+/* Tabla del modal Calculador: fuente más compacta para que entren más filas
+   sin agrandar el modal. */
+.dsp-calc-table table     { font-size: .78rem; }
+.dsp-calc-table th        { padding: 8px 10px; font-size: .7rem; }
+.dsp-calc-table td        { padding: 6px 10px; }
+.dsp-calc-table .td-id    { font-size: .72rem; }
 
 .field-error   { margin-top: 4px; font-size: .78rem; color: var(--danger); }
 .input-invalid { border-color: var(--danger) !important;

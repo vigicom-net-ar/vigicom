@@ -2499,7 +2499,7 @@
 
     // -------- Vista: Alarmas ----------------------------------------------
 
-    var alarmasFiltros = {
+    var alarmasFiltrosDefault = {
         sort:      'id',
         dir:       'desc',
         limit:     100,
@@ -2509,6 +2509,10 @@
         estado:    '',
         conexion:  ''
     };
+    var alarmasFiltros         = Object.assign({}, alarmasFiltrosDefault);
+    var alarmasFiltrosSnapshot = null;
+    var alarmasCache           = { comunidades: [], onlineSec: 600 };
+    var alarmasRegistroCache   = {};
 
     function alarmasQueryString() {
         var qs = [];
@@ -2521,66 +2525,139 @@
         return qs.length ? ('?' + qs.join('&')) : '';
     }
 
-    async function renderAlarmas(view) {
-        var data        = await api('/api/alarmas.php' + alarmasQueryString());
-        var alarmas     = data.alarmas     || [];
-        var kpis        = data.kpis        || {};
-        var comunidades = data.comunidades || [];
-        var onlineSec   = data.online_interval_seconds || 600;
+    function alarmasFiltrosActivos() {
+        var n = 0;
+        Object.keys(alarmasFiltrosDefault).forEach(function (k) {
+            if (k === 'sort' || k === 'dir' || k === 'limit') return;
+            if (String(alarmasFiltros[k]) !== String(alarmasFiltrosDefault[k])) n++;
+        });
+        return n;
+    }
 
-        var filtrosActivos = (alarmasFiltros.filtro_id !== '' ? 1 : 0) +
-                             (alarmasFiltros.nombre    !== '' ? 1 : 0) +
-                             (alarmasFiltros.comunidad !== '' ? 1 : 0) +
-                             (alarmasFiltros.estado    !== '' ? 1 : 0) +
-                             (alarmasFiltros.conexion  !== '' ? 1 : 0);
-        var badgeFiltros = filtrosActivos
-            ? ' <span class="badge badge-info" style="margin-left:6px;">' + filtrosActivos + '</span>'
-            : '';
+    function actualizarBadgeFiltrosAlarmas() {
+        var btn = document.getElementById('alaFiltros');
+        if (!btn) return;
+        var badge = btn.querySelector('.btn-icon-badge');
+        var n = alarmasFiltrosActivos();
+        btn.classList.toggle('active', n > 0);
+        if (badge) {
+            badge.textContent = n || '';
+            badge.style.display = n ? '' : 'none';
+        }
+    }
+
+    function alarmasCountText(n) {
+        return 'Mostrando ' + n + ' resultado(s) (límite ' + alarmasFiltros.limit + ').';
+    }
+
+    function moduleHelpAlarmasHtml() {
+        return '<div class="module-help" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin-bottom:16px;box-shadow:var(--shadow);display:flex;gap:14px;align-items:center;">' +
+            '<div style="font-size:1.6rem;line-height:1;">🚨</div>' +
+            '<div style="font-size:.88rem;color:var(--muted);line-height:1.45;">' +
+                'Las alarmas son los dispositivos instalados en las casas y comunidades que detectan eventos y reportan al sistema su estado de conexión, salud y telemetría.' +
+            '</div>' +
+        '</div>';
+    }
+
+    function renderAlarmasStats(kpis) {
+        return statCard('Online',  kpis.online  || 0, 'green',  'Latido en los últimos 10 min') +
+               statCard('Offline', kpis.offline || 0, 'red',    'Sin latido reciente') +
+               statCard('Total',   kpis.total   || 0, 'orange', 'Alarmas registradas');
+    }
+
+    function toolbarAlarmasHtml() {
+        var n = alarmasFiltrosActivos();
+        var badge = '<span class="btn-icon-badge"' + (n ? '' : ' style="display:none;"') + '>' + (n || '') + '</span>';
+        var activo = n ? ' active' : '';
+        return '<div class="toolbar">' +
+            '<div class="toolbar-left" style="gap:8px;flex-wrap:wrap;">' +
+                '<div class="search-wrap">' +
+                    '<input type="search" id="alaSearch" class="search-input" placeholder="🔍 Buscar nombre, identidad o domicilio…">' +
+                    '<button class="search-clear" id="alaSearchClear" type="button" style="display:none;">&times;</button>' +
+                '</div>' +
+                '<button class="btn btn-ghost btn-icon' + activo + '" id="alaFiltros" type="button" title="Filtros">' +
+                    '<i class="fa-solid fa-filter"></i>' + badge +
+                '</button>' +
+                '<button class="btn btn-ghost btn-icon" id="alaRefrescar" type="button" title="Refrescar">' +
+                    '<i class="fa-solid fa-rotate"></i>' +
+                '</button>' +
+            '</div>' +
+            '<div class="toolbar-right">' +
+                '<button class="btn btn-primary" id="alaNuevo" type="button">+ Nueva alarma</button>' +
+            '</div>' +
+        '</div>';
+    }
+
+    function ctxMenuAlarmasHtml() {
+        return '<div id="alaCtxMenu" class="ctx-menu" role="menu">' +
+            '<button type="button" data-action="consultar" role="menuitem">' +
+                '<i class="fa-solid fa-eye"></i><span>Consultar</span>' +
+            '</button>' +
+            '<div class="ctx-menu-sep"></div>' +
+            '<button type="button" data-action="editar" role="menuitem">' +
+                '<i class="fa-solid fa-pen"></i><span>Editar</span>' +
+            '</button>' +
+            '<button type="button" data-action="eliminar" class="ctx-menu-danger" role="menuitem">' +
+                '<i class="fa-solid fa-trash"></i><span>Eliminar</span>' +
+            '</button>' +
+        '</div>';
+    }
+
+    async function recargarAlarmasLista() {
+        try {
+            var data    = await api('/api/alarmas.php' + alarmasQueryString());
+            var alarmas = data.alarmas     || [];
+            var kpis    = data.kpis        || {};
+            alarmasCache.comunidades = data.comunidades             || [];
+            alarmasCache.onlineSec   = data.online_interval_seconds || 600;
+            alarmasRegistroCache     = {};
+            var stats = document.getElementById('alaStats');
+            var tbody = document.getElementById('alaTbody');
+            var count = document.getElementById('alaCount');
+            if (stats) stats.innerHTML = renderAlarmasStats(kpis);
+            if (tbody) tbody.innerHTML = renderFilasAlarmas(alarmas, alarmasCache.onlineSec);
+            if (count) count.textContent = alarmasCountText(alarmas.length);
+            actualizarBadgeFiltrosAlarmas();
+            var searchInput = document.getElementById('alaSearch');
+            if (searchInput) searchInput.dispatchEvent(new Event('input'));
+        } catch (err) {
+            toast(err.message, true);
+        }
+    }
+
+    async function renderAlarmas(view) {
+        var data    = await api('/api/alarmas.php' + alarmasQueryString());
+        var alarmas = data.alarmas     || [];
+        var kpis    = data.kpis        || {};
+        alarmasCache.comunidades = data.comunidades             || [];
+        alarmasCache.onlineSec   = data.online_interval_seconds || 600;
+        alarmasRegistroCache     = {};
 
         view.innerHTML =
-            '<div class="page-header"><div>' +
-                '<h1>Alarmas</h1>' +
-                '<p>Dispositivos de alarma instalados en las comunidades.</p>' +
-            '</div></div>' +
+            moduleHelpAlarmasHtml() +
 
-            '<div class="stats-bar">' +
-                statCard('Total',   kpis.total   || 0, 'orange', 'Alarmas registradas') +
-                statCard('Online',  kpis.online  || 0, 'green',  'Latido en los últimos 10 min') +
-                statCard('Offline', kpis.offline || 0, 'red',    'Sin latido reciente') +
-            '</div>' +
+            '<div class="stats-bar" id="alaStats">' + renderAlarmasStats(kpis) + '</div>' +
 
-            '<div class="toolbar">' +
-                '<div class="toolbar-left">' +
-                    '<div class="search-wrap">' +
-                        '<input type="search" id="alaSearch" class="search-input" placeholder="Buscar nombre, identidad o domicilio...">' +
-                        '<button class="search-clear" id="alaSearchClear" type="button" style="display:none;">&times;</button>' +
-                    '</div>' +
-                    '<button class="btn btn-secondary" id="alaFiltros" type="button">' +
-                        '<i class="fa-solid fa-filter"></i> Filtros' + badgeFiltros +
-                    '</button>' +
-                '</div>' +
-                '<div class="toolbar-right">' +
-                    '<button class="btn btn-primary" id="alaNuevo" type="button">+ Nueva alarma</button>' +
-                '</div>' +
-            '</div>' +
+            toolbarAlarmasHtml() +
 
             '<div class="table-card">' +
                 '<table><thead><tr>' +
                     '<th>Código</th><th>Nombre</th><th>Comunidad</th><th>Identidad</th><th>Conexión</th><th>Estado</th>' +
-                    '<th style="text-align:right;">Acciones</th>' +
+                    '<th style="text-align:center;">Acciones</th>' +
                 '</tr></thead><tbody id="alaTbody">' +
-                renderFilasAlarmas(alarmas, onlineSec) +
+                renderFilasAlarmas(alarmas, alarmasCache.onlineSec) +
                 '</tbody></table>' +
                 '<div class="table-empty" id="alaEmpty" style="display:none;">No hay alarmas que coincidan con la búsqueda.</div>' +
             '</div>' +
-            '<div class="text-muted text-sm" style="margin-top:10px;">' +
-                'Mostrando ' + alarmas.length + ' resultado(s) (límite ' + alarmasFiltros.limit + ').' +
+            '<div class="text-muted text-sm" id="alaCount" style="margin-top:10px;">' +
+                alarmasCountText(alarmas.length) +
             '</div>' +
 
-            modalAlarmaHtml(comunidades) +
-            modalFiltrosAlarmasHtml(comunidades) +
+            modalAlarmaHtml(alarmasCache.comunidades) +
+            modalFiltrosAlarmasHtml(alarmasCache.comunidades) +
             modalConsultarAlarmaHtml() +
-            confirmDeleteAlarmaHtml();
+            confirmDeleteAlarmaHtml() +
+            ctxMenuAlarmasHtml();
 
         wireAlarmasView();
     }
@@ -2593,7 +2670,7 @@
             var online = a.latido && ((Date.now() - new Date(a.latido).getTime()) / 1000 <= onlineSec);
             var activa = parseInt(a.estado, 10) === 1;
             var busq   = String((a.nombre || '') + ' ' + (a.identidad || '') + ' ' + (a.domicilio || '') + ' ' + (a.comunidad_nombre || '')).toLowerCase().trim();
-            return '<tr data-id="' + a.id + '" data-search="' + e(busq) + '">' +
+            return '<tr data-id="' + a.id + '" data-search="' + e(busq) + '" style="cursor:pointer;">' +
                 '<td class="td-id">#' + a.id + '</td>' +
                 '<td>' +
                     '<div class="td-nombre">' + e(a.nombre || '—') + '</div>' +
@@ -2614,11 +2691,11 @@
                         ? '<span class="badge badge-success">Activa</span>'
                         : '<span class="badge badge-danger">Inactiva</span>') +
                 '</td>' +
-                '<td>' +
-                    '<div class="actions" style="justify-content:flex-end;">' +
-                        '<button class="btn-icon-sm" data-act="view"   type="button" title="Consultar"><i class="fa-solid fa-eye"></i></button>' +
-                        '<button class="btn-icon-sm" data-act="edit"   type="button" title="Editar"><i class="fa-solid fa-pencil"></i></button>' +
-                        '<button class="btn-icon-sm" data-act="delete" type="button" title="Eliminar"><i class="fa-solid fa-trash"></i></button>' +
+                '<td style="text-align:center;">' +
+                    '<div class="actions" style="justify-content:center;">' +
+                        '<button class="btn-icon-sm" data-act="menu" type="button" title="Más acciones">' +
+                            '<i class="fa-solid fa-bars"></i>' +
+                        '</button>' +
                     '</div>' +
                 '</td>' +
             '</tr>';
@@ -2695,72 +2772,62 @@
 
     function modalFiltrosAlarmasHtml(comunidades) {
         var optsCom = comunidades.map(function (c) {
-            var sel = String(alarmasFiltros.comunidad) === String(c.id) ? ' selected' : '';
-            return '<option value="' + c.id + '"' + sel + '>' + e(c.nombre) + '</option>';
+            return '<option value="' + c.id + '">' + e(c.nombre) + '</option>';
         }).join('');
-        function selOpt(value, label, current) {
-            var sel = String(current) === String(value) ? ' selected' : '';
-            return '<option value="' + e(value) + '"' + sel + '>' + e(label) + '</option>';
-        }
 
-        return '<div class="modal-backdrop" id="alaFiltrosModal"><div class="modal">' +
+        return '<div class="modal-backdrop" id="alaFiltrosModal"><div class="modal" style="max-width:560px;">' +
             '<div class="modal-header">' +
-                '<div class="modal-title"><span>Filtros</span></div>' +
-                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+                '<div class="modal-title"><i class="fa-solid fa-filter"></i> Filtros</div>' +
+                '<button class="btn btn-ghost" data-act="cerrar" type="button" title="Cerrar">&times;</button>' +
             '</div>' +
-            '<form id="alaFiltrosForm" novalidate>' +
-                '<div class="modal-body">' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="aflt-id">Código</label>' +
-                            '<input id="aflt-id" type="number" min="1" step="1" inputmode="numeric" ' +
-                                'placeholder="Código del registro" value="' + e(alarmasFiltros.filtro_id) + '"></div>' +
-                        '<div class="form-group"><label for="aflt-nombre">Nombre</label>' +
-                            '<input id="aflt-nombre" type="text" maxlength="255" ' +
-                                'placeholder="Nombre de la alarma" value="' + e(alarmasFiltros.nombre) + '"></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="aflt-comunidad">Comunidad</label>' +
-                            '<select id="aflt-comunidad"><option value="">Todas</option>' + optsCom + '</select></div>' +
-                        '<div class="form-group"><label for="aflt-conexion">Conexión</label>' +
-                            '<select id="aflt-conexion">' +
-                                selOpt('',        'Todas',   alarmasFiltros.conexion) +
-                                selOpt('online',  'Online',  alarmasFiltros.conexion) +
-                                selOpt('offline', 'Offline', alarmasFiltros.conexion) +
-                            '</select></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="aflt-estado">Estado</label>' +
-                            '<select id="aflt-estado">' +
-                                selOpt('',  'Todas',     alarmasFiltros.estado) +
-                                selOpt('1', 'Activas',   alarmasFiltros.estado) +
-                                selOpt('0', 'Inactivas', alarmasFiltros.estado) +
-                            '</select></div>' +
-                        '<div class="form-group"><label for="aflt-limit">Límite</label>' +
-                            '<input id="aflt-limit" type="number" min="1" max="1000" step="1" ' +
-                                'inputmode="numeric" value="' + e(alarmasFiltros.limit) + '"></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="aflt-sort">Ordenar por</label>' +
-                            '<select id="aflt-sort">' +
-                                selOpt('id',          'Código',        alarmasFiltros.sort) +
-                                selOpt('nombre',      'Nombre',        alarmasFiltros.sort) +
-                                selOpt('comunidad',   'Comunidad',     alarmasFiltros.sort) +
-                                selOpt('latido',      'Último latido', alarmasFiltros.sort) +
-                                selOpt('instalacion', 'Instalación',   alarmasFiltros.sort) +
-                            '</select></div>' +
-                        '<div class="form-group"><label for="aflt-dir">Dirección</label>' +
-                            '<select id="aflt-dir">' +
-                                selOpt('desc', 'Descendente', alarmasFiltros.dir) +
-                                selOpt('asc',  'Ascendente',  alarmasFiltros.dir) +
-                            '</select></div>' +
+            '<div class="modal-body">' +
+                '<div class="form-row">' +
+                    '<div class="form-group"><label for="aflt-id">Código</label>' +
+                        '<input id="aflt-id" type="number" min="1" step="1" inputmode="numeric" placeholder="ID de la alarma…"></div>' +
+                    '<div class="form-group"><label for="aflt-nombre">Nombre</label>' +
+                        '<input id="aflt-nombre" type="text" maxlength="255" placeholder="Nombre de la alarma…"></div>' +
+                '</div>' +
+                '<div class="form-group"><label for="aflt-comunidad">Comunidad</label>' +
+                    '<select id="aflt-comunidad"><option value="">Todas</option>' + optsCom + '</select></div>' +
+                '<div class="form-group">' +
+                    '<label>Conexión</label>' +
+                    '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+                        '<button type="button" class="filter-chip" data-chip="conexion" data-value=""       >Todas</button>' +
+                        '<button type="button" class="filter-chip" data-chip="conexion" data-value="online" >Online</button>' +
+                        '<button type="button" class="filter-chip" data-chip="conexion" data-value="offline">Offline</button>' +
                     '</div>' +
                 '</div>' +
-                '<div class="modal-footer">' +
-                    '<button type="button" class="btn btn-ghost"     id="alaFiltrosReset" >Limpiar</button>' +
-                    '<button type="button" class="btn btn-secondary" data-act="close"    >Cancelar</button>' +
-                    '<button type="submit"  class="btn btn-primary"                       >Aplicar</button>' +
+                '<div class="form-group">' +
+                    '<label>Estado del registro</label>' +
+                    '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+                        '<button type="button" class="filter-chip" data-chip="estado" data-value="" >Todas</button>' +
+                        '<button type="button" class="filter-chip" data-chip="estado" data-value="1">Activas</button>' +
+                        '<button type="button" class="filter-chip" data-chip="estado" data-value="0">Inactivas</button>' +
+                    '</div>' +
                 '</div>' +
-            '</form>' +
+                '<div class="form-row form-row-3">' +
+                    '<div class="form-group"><label for="aflt-limit">Límite</label>' +
+                        '<input id="aflt-limit" type="number" min="1" max="1000" step="1" inputmode="numeric"></div>' +
+                    '<div class="form-group"><label for="aflt-sort">Ordenar por</label>' +
+                        '<select id="aflt-sort">' +
+                            '<option value="id">Código</option>' +
+                            '<option value="nombre">Nombre</option>' +
+                            '<option value="comunidad">Comunidad</option>' +
+                            '<option value="latido">Último latido</option>' +
+                            '<option value="instalacion">Instalación</option>' +
+                        '</select></div>' +
+                    '<div class="form-group"><label for="aflt-dir">Dirección</label>' +
+                        '<select id="aflt-dir">' +
+                            '<option value="desc">Descendente</option>' +
+                            '<option value="asc">Ascendente</option>' +
+                        '</select></div>' +
+                '</div>' +
+            '</div>' +
+            '<div class="modal-footer">' +
+                '<button type="button" class="btn btn-ghost"   data-act="cerrar"  >Cerrar</button>' +
+                '<button type="button" class="btn btn-ghost"   data-act="limpiar" >Limpiar</button>' +
+                '<button type="button" class="btn btn-primary" data-act="aplicar" >Aplicar</button>' +
+            '</div>' +
         '</div></div>';
     }
 
@@ -2778,6 +2845,9 @@
             '</div>' +
             '<div class="modal-footer">' +
                 '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+                '<button type="button" class="btn btn-primary" id="alaConsultarEditar">' +
+                    '<i class="fa-solid fa-pen"></i> Editar' +
+                '</button>' +
             '</div>' +
         '</div></div>';
     }
@@ -2814,16 +2884,21 @@
         var btnDelete  = document.getElementById('alaConfirmBtn');
 
         var filtrosModal = document.getElementById('alaFiltrosModal');
-        var filtrosForm  = document.getElementById('alaFiltrosForm');
 
-        var consultarModal = document.getElementById('alaConsultar');
-        var consultarSub   = document.getElementById('alaConsultarSub');
-        var consultarBody  = document.getElementById('alaConsultarBody');
+        var consultarModal  = document.getElementById('alaConsultar');
+        var consultarSub    = document.getElementById('alaConsultarSub');
+        var consultarBody   = document.getElementById('alaConsultarBody');
+        var consultarEditar = document.getElementById('alaConsultarEditar');
 
-        var pendingDeleteId = null;
-        var modoEdicion     = false;
+        var ctxMenu = document.getElementById('alaCtxMenu');
+        var ctxId   = null;
 
-        function applyFilters() {
+        var pendingDeleteId   = null;
+        var modoEdicion       = false;
+        var consultarIdActual = null;
+
+        // --- Búsqueda rápida cliente ------------------------------------
+        function applyClientFilter() {
             var q = searchInput.value.trim().toLowerCase();
             var visibles = 0;
             tbody.querySelectorAll('tr[data-id]').forEach(function (tr) {
@@ -2835,62 +2910,181 @@
             emptyState.style.display = (visibles === 0 && tbody.querySelector('tr[data-id]')) ? '' : 'none';
             searchClear.style.display = q ? '' : 'none';
         }
-
-        searchInput.addEventListener('input', applyFilters);
+        searchInput.addEventListener('input', applyClientFilter);
         searchClear.addEventListener('click', function () {
             searchInput.value = '';
-            applyFilters();
+            applyClientFilter();
             searchInput.focus();
         });
 
-        document.getElementById('alaFiltros').addEventListener('click', function () {
-            filtrosModal.classList.add('open');
-        });
-        filtrosModal.addEventListener('click', function (ev) {
-            if (ev.target === filtrosModal || ev.target.closest('[data-act="close"]')) {
-                filtrosModal.classList.remove('open');
-            }
-        });
-        document.getElementById('alaFiltrosReset').addEventListener('click', function () {
-            alarmasFiltros.sort      = 'id';
-            alarmasFiltros.dir       = 'desc';
-            alarmasFiltros.limit     = 100;
-            alarmasFiltros.filtro_id = '';
-            alarmasFiltros.nombre    = '';
-            alarmasFiltros.comunidad = '';
-            alarmasFiltros.estado    = '';
-            alarmasFiltros.conexion  = '';
-            filtrosModal.classList.remove('open');
-            navigate();
-        });
-        filtrosForm.addEventListener('submit', function (ev) {
-            ev.preventDefault();
-            alarmasFiltros.filtro_id = document.getElementById('aflt-id').value.trim();
-            alarmasFiltros.nombre    = document.getElementById('aflt-nombre').value.trim();
-            alarmasFiltros.comunidad = document.getElementById('aflt-comunidad').value;
-            alarmasFiltros.conexion  = document.getElementById('aflt-conexion').value;
-            alarmasFiltros.estado    = document.getElementById('aflt-estado').value;
-            alarmasFiltros.limit     = parseInt(document.getElementById('aflt-limit').value, 10) || 100;
-            alarmasFiltros.sort      = document.getElementById('aflt-sort').value || 'id';
-            alarmasFiltros.dir       = document.getElementById('aflt-dir').value  || 'desc';
-            filtrosModal.classList.remove('open');
-            navigate();
+        // --- Refrescar ---------------------------------------------------
+        document.getElementById('alaRefrescar').addEventListener('click', function () {
+            recargarAlarmasLista();
         });
 
+        // --- Modal de filtros (live apply + snapshot) -------------------
+        var fId_     = document.getElementById('aflt-id');
+        var fNombre  = document.getElementById('aflt-nombre');
+        var fCom     = document.getElementById('aflt-comunidad');
+        var fLimit   = document.getElementById('aflt-limit');
+        var fSort    = document.getElementById('aflt-sort');
+        var fDir     = document.getElementById('aflt-dir');
+        var fChipsConexion = filtrosModal.querySelectorAll('.filter-chip[data-chip="conexion"]');
+        var fChipsEstado   = filtrosModal.querySelectorAll('.filter-chip[data-chip="estado"]');
+
+        function sincronizarControlesFiltros() {
+            fId_.value    = alarmasFiltros.filtro_id;
+            fNombre.value = alarmasFiltros.nombre;
+            fCom.value    = alarmasFiltros.comunidad;
+            fLimit.value  = alarmasFiltros.limit;
+            fSort.value   = alarmasFiltros.sort;
+            fDir.value    = alarmasFiltros.dir;
+            fChipsConexion.forEach(function (c) {
+                c.classList.toggle('active', c.dataset.value === String(alarmasFiltros.conexion || ''));
+            });
+            fChipsEstado.forEach(function (c) {
+                c.classList.toggle('active', c.dataset.value === String(alarmasFiltros.estado || ''));
+            });
+        }
+        function abrirModalFiltros() {
+            alarmasFiltrosSnapshot = Object.assign({}, alarmasFiltros);
+            sincronizarControlesFiltros();
+            filtrosModal.classList.add('open');
+        }
+        function cerrarModalFiltros() { filtrosModal.classList.remove('open'); }
+        function cancelarFiltros() {
+            if (alarmasFiltrosSnapshot) {
+                Object.keys(alarmasFiltrosSnapshot).forEach(function (k) {
+                    alarmasFiltros[k] = alarmasFiltrosSnapshot[k];
+                });
+                alarmasFiltrosSnapshot = null;
+                recargarAlarmasLista();
+            }
+            cerrarModalFiltros();
+        }
+        function limpiarFiltros() {
+            Object.assign(alarmasFiltros, alarmasFiltrosDefault);
+            sincronizarControlesFiltros();
+            recargarAlarmasLista();
+        }
+
+        document.getElementById('alaFiltros').addEventListener('click', abrirModalFiltros);
+        filtrosModal.addEventListener('click', function (ev) {
+            if (ev.target === filtrosModal) { cancelarFiltros(); return; }
+            var b = ev.target.closest('button[data-act]');
+            if (!b) return;
+            if (b.dataset.act === 'cerrar')  cancelarFiltros();
+            if (b.dataset.act === 'limpiar') limpiarFiltros();
+            if (b.dataset.act === 'aplicar') { alarmasFiltrosSnapshot = null; cerrarModalFiltros(); }
+        });
+
+        function liveApply(field, valueGetter) {
+            return function () {
+                alarmasFiltros[field] = valueGetter();
+                recargarAlarmasLista();
+            };
+        }
+        fId_.addEventListener('input',    liveApply('filtro_id', function () { return fId_.value.trim(); }));
+        fNombre.addEventListener('input', liveApply('nombre',    function () { return fNombre.value.trim(); }));
+        fCom.addEventListener('change',   liveApply('comunidad', function () { return fCom.value; }));
+        fLimit.addEventListener('change', liveApply('limit',     function () { return parseInt(fLimit.value, 10) || 100; }));
+        fSort.addEventListener('change',  liveApply('sort',      function () { return fSort.value || 'id'; }));
+        fDir.addEventListener('change',   liveApply('dir',       function () { return fDir.value  || 'desc'; }));
+        fChipsConexion.forEach(function (chip) {
+            chip.addEventListener('click', function () {
+                alarmasFiltros.conexion = chip.dataset.value;
+                fChipsConexion.forEach(function (c) { c.classList.toggle('active', c === chip); });
+                recargarAlarmasLista();
+            });
+        });
+        fChipsEstado.forEach(function (chip) {
+            chip.addEventListener('click', function () {
+                alarmasFiltros.estado = chip.dataset.value;
+                fChipsEstado.forEach(function (c) { c.classList.toggle('active', c === chip); });
+                recargarAlarmasLista();
+            });
+        });
+
+        // --- Menú contextual de fila -----------------------------------
+        function cerrarCtxMenu() {
+            ctxMenu.classList.remove('open');
+            ctxId = null;
+        }
+        function abrirCtxMenu(x, y, id) {
+            ctxId = id;
+            ctxMenu.classList.add('open');
+            var rect = ctxMenu.getBoundingClientRect();
+            var w = rect.width, h = rect.height;
+            var vw = window.innerWidth, vh = window.innerHeight;
+            var left = Math.min(x, vw - w - 8);
+            var top  = Math.min(y, vh - h - 8);
+            ctxMenu.style.left = Math.max(8, left) + 'px';
+            ctxMenu.style.top  = Math.max(8, top)  + 'px';
+        }
+        ctxMenu.addEventListener('click', function (ev) {
+            var b = ev.target.closest('button[data-action]');
+            if (!b || ctxId == null) return;
+            var id = ctxId;
+            cerrarCtxMenu();
+            if (b.dataset.action === 'consultar')     abrirConsulta(id);
+            else if (b.dataset.action === 'editar')   abrirEdicion(id);
+            else if (b.dataset.action === 'eliminar') pedirEliminar(id);
+        });
+
+        // Cierre global del menú contextual.
+        document.addEventListener('click', function (ev) {
+            if (ctxMenu.classList.contains('open') && !ctxMenu.contains(ev.target)) cerrarCtxMenu();
+        });
+        document.addEventListener('scroll',  function () { cerrarCtxMenu(); }, true);
+        window.addEventListener('resize',    function () { cerrarCtxMenu(); });
+        document.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Escape') cerrarCtxMenu();
+        });
+
+        // --- Filas: clic = Consultar, click derecho = ctx menu ---------
+        tbody.addEventListener('click', function (ev) {
+            var tr = ev.target.closest('tr[data-id]');
+            if (!tr) return;
+            var id = parseInt(tr.dataset.id, 10);
+            var btn = ev.target.closest('button[data-act="menu"]');
+            if (btn) {
+                ev.stopPropagation();
+                var rect = btn.getBoundingClientRect();
+                abrirCtxMenu(rect.right - 200, rect.bottom + 4, id);
+                return;
+            }
+            if (ev.target.closest('a,input,select,button')) return;
+            abrirConsulta(id);
+        });
+        tbody.addEventListener('contextmenu', function (ev) {
+            var tr = ev.target.closest('tr[data-id]');
+            if (!tr) return;
+            ev.preventDefault();
+            var id = parseInt(tr.dataset.id, 10);
+            abrirCtxMenu(ev.clientX, ev.clientY, id);
+        });
+
+        // --- Modal Consultar -------------------------------------------
         consultarModal.addEventListener('click', function (ev) {
             if (ev.target === consultarModal || ev.target.closest('[data-act="close"]')) {
                 consultarModal.classList.remove('open');
             }
         });
+        consultarEditar.addEventListener('click', function () {
+            if (consultarIdActual == null) return;
+            consultarModal.classList.remove('open');
+            abrirEdicion(consultarIdActual);
+        });
 
         async function abrirConsulta(id) {
+            consultarIdActual = id;
             consultarSub.innerHTML  = '<code>#' + id + '</code>';
             consultarBody.innerHTML = '<div style="display:flex;justify-content:center;padding:24px"><div class="spin"></div></div>';
             consultarModal.classList.add('open');
 
             var a;
             try {
-                a = await api('/api/alarmas.php?id=' + id);
+                a = alarmasRegistroCache[id] || (alarmasRegistroCache[id] = await api('/api/alarmas.php?id=' + id));
             } catch (err) {
                 consultarBody.innerHTML = '<div class="alert alert-error">' + e(err.message) + '</div>';
                 return;
@@ -2940,6 +3134,7 @@
                 abmRowTxt ('Parámetros',           a.parametros,  'Sin parámetros');
         }
 
+        // --- Modal Alta / Edición --------------------------------------
         function setEstadoLabel() {
             estadoLabel.textContent = fEstado.checked ? 'Activa' : 'Inactiva';
         }
@@ -2975,69 +3170,56 @@
             document.getElementById('ala-nombre').focus();
         });
 
-        tbody.addEventListener('click', async function (ev) {
-            var btn = ev.target.closest('button[data-act]');
-            if (!btn) return;
-            var tr = btn.closest('tr[data-id]');
-            if (!tr) return;
-            var id = parseInt(tr.dataset.id, 10);
-
-            if (btn.dataset.act === 'view') {
-                abrirConsulta(id);
-                return;
+        async function abrirEdicion(id) {
+            try {
+                var a = alarmasRegistroCache[id] || (alarmasRegistroCache[id] = await api('/api/alarmas.php?id=' + id));
+                modoEdicion = true;
+                resetForm();
+                fId.value = a.id;
+                modalTitulo.textContent = 'Editar alarma';
+                modalSub.textContent    = '#' + a.id;
+                document.getElementById('ala-nombre').value    = a.nombre    || '';
+                document.getElementById('ala-comunidad').value = a.comunidad != null ? a.comunidad : '';
+                document.getElementById('ala-identidad').value = a.identidad || '';
+                document.getElementById('ala-tipo').value      = a.tipo      || '';
+                document.getElementById('ala-domicilio').value = a.domicilio || '';
+                document.getElementById('ala-ciudad').value    = a.ciudad    || '';
+                document.getElementById('ala-hardware').value  = a.hardware  || '';
+                document.getElementById('ala-firmware').value  = a.firmware  || '';
+                document.getElementById('ala-revision').value  = a.revision  || '';
+                document.getElementById('ala-latitud').value   = a.latitud   || '';
+                document.getElementById('ala-longitud').value  = a.longitud  || '';
+                fEstado.checked = parseInt(a.estado, 10) === 1;
+                setEstadoLabel();
+                openModal();
+                document.getElementById('ala-nombre').focus();
+            } catch (err) {
+                toast(err.message, true);
             }
+        }
 
-            if (btn.dataset.act === 'edit') {
-                try {
-                    var a = await api('/api/alarmas.php?id=' + id);
-                    modoEdicion = true;
-                    resetForm();
-                    fId.value = a.id;
-                    modalTitulo.textContent = 'Editar alarma';
-                    modalSub.textContent    = '#' + a.id;
-                    document.getElementById('ala-nombre').value    = a.nombre    || '';
-                    document.getElementById('ala-comunidad').value = a.comunidad != null ? a.comunidad : '';
-                    document.getElementById('ala-identidad').value = a.identidad || '';
-                    document.getElementById('ala-tipo').value      = a.tipo      || '';
-                    document.getElementById('ala-domicilio').value = a.domicilio || '';
-                    document.getElementById('ala-ciudad').value    = a.ciudad    || '';
-                    document.getElementById('ala-hardware').value  = a.hardware  || '';
-                    document.getElementById('ala-firmware').value  = a.firmware  || '';
-                    document.getElementById('ala-revision').value  = a.revision  || '';
-                    document.getElementById('ala-latitud').value   = a.latitud   || '';
-                    document.getElementById('ala-longitud').value  = a.longitud  || '';
-                    fEstado.checked = parseInt(a.estado, 10) === 1;
-                    setEstadoLabel();
-                    openModal();
-                    document.getElementById('ala-nombre').focus();
-                } catch (err) {
-                    toast(err.message, true);
-                }
-                return;
-            }
-
-            if (btn.dataset.act === 'delete') {
-                var nombre = (tr.querySelector('.td-nombre') || {}).textContent || ('#' + id);
-                confirmMsg.textContent = '¿Eliminar la alarma "' + nombre.trim() + '"? Esta acción no se puede deshacer.';
-                pendingDeleteId = id;
-                confirmBox.classList.add('open');
-            }
-        });
-
+        function pedirEliminar(id) {
+            var tr = tbody.querySelector('tr[data-id="' + id + '"]');
+            var nombre = tr ? ((tr.querySelector('.td-nombre') || {}).textContent || '').trim() : '';
+            confirmMsg.textContent = nombre
+                ? '¿Eliminar la alarma "' + nombre + '"? Esta acción no se puede deshacer.'
+                : '¿Eliminar la alarma #' + id + '? Esta acción no se puede deshacer.';
+            pendingDeleteId = id;
+            confirmBox.classList.add('open');
+        }
         confirmBox.addEventListener('click', function (ev) {
             if (ev.target === confirmBox || ev.target.closest('[data-act="cancel"]')) {
                 confirmBox.classList.remove('open');
                 pendingDeleteId = null;
             }
         });
-
         btnDelete.addEventListener('click', async function () {
             if (!pendingDeleteId) return;
             btnDelete.disabled = true;
             try {
                 await api('/api/alarmas.php?id=' + pendingDeleteId, { method: 'DELETE' });
                 toast('Alarma eliminada.');
-                navigate();
+                recargarAlarmasLista();
             } catch (err) {
                 toast(err.message, true);
             } finally {
@@ -3082,7 +3264,7 @@
                     toast('Alarma creada.');
                 }
                 closeModal();
-                navigate();
+                recargarAlarmasLista();
             } catch (err) {
                 showFormError(err.message);
             } finally {
@@ -3090,7 +3272,7 @@
             }
         });
 
-        applyFilters();
+        applyClientFilter();
     }
 
     // -------- Vista: Disparos ---------------------------------------------
@@ -3168,6 +3350,7 @@
             modalFiltrosDisparosHtml(disparosCache.comunidades, disparosCache.casas, disparosCache.guardias) +
             modalConsultarDisparoHtml() +
             modalCalculadorDisparosHtml(disparosCache.guardias) +
+            modalAyudaCalculadorHtml() +
             confirmDeleteDisparoHtml() +
             ctxMenuDisparosHtml() +
             ctxMenuToolbarDisparosHtml();
@@ -3241,7 +3424,12 @@
                 '<div class="modal-title">' +
                     '<i class="fa-solid fa-calculator"></i> Calculador de disparos' +
                 '</div>' +
-                '<button class="btn btn-ghost" data-act="close" type="button" title="Cerrar">&times;</button>' +
+                '<div style="display:flex;gap:6px;align-items:center;">' +
+                    '<button class="btn btn-ghost" id="dspCalcAyuda" type="button" title="Ayuda">' +
+                        '<i class="fa-regular fa-circle-question"></i>' +
+                    '</button>' +
+                    '<button class="btn btn-ghost" data-act="close" type="button" title="Cerrar">&times;</button>' +
+                '</div>' +
             '</div>' +
             '<div class="modal-body">' +
                 '<div class="form-row form-row-3">' +
@@ -3255,7 +3443,7 @@
                 '<div id="dspCalcResumen" class="alert alert-info" style="margin-bottom:12px;">' +
                     'Seleccioná un mes y, opcionalmente, una guardia para ver el cálculo.' +
                 '</div>' +
-                '<div class="table-card" style="max-height:380px;overflow:auto;">' +
+                '<div class="table-card dsp-calc-table" style="max-height:38vh;overflow:auto;">' +
                     '<table><thead><tr>' +
                         '<th>Código</th><th>Fecha</th><th>Modo</th><th>Comunidad</th><th>Casa</th>' +
                         '<th>Guardia</th><th>Espera</th><th>Factor</th>' +
@@ -3272,6 +3460,54 @@
         '</div></div>';
     }
 
+    function modalAyudaCalculadorHtml() {
+        var filas = [
+            ['0 – 10',   '2.0x'],
+            ['10 – 20',  '1.8x'],
+            ['20 – 30',  '1.6x'],
+            ['30 – 40',  '1.4x'],
+            ['40 – 50',  '1.2x'],
+            ['50 – 60',  '1.0x'],
+            ['60 – 70',  '0.9x'],
+            ['70 – 80',  '0.8x'],
+            ['80 – 90',  '0.7x'],
+            ['90 – 100', '0.6x'],
+            ['100 o más','0.5x']
+        ].map(function (r) {
+            return '<tr><td>' + r[0] + '</td><td style="text-align:right;font-weight:600;">' + r[1] + '</td></tr>';
+        }).join('');
+
+        return '<div class="modal-backdrop" id="dspCalcAyudaModal"><div class="modal" style="max-width:520px;">' +
+            '<div class="modal-header">' +
+                '<div class="modal-title">' +
+                    '<i class="fa-regular fa-circle-question"></i> ¿Cómo funciona el calculador?' +
+                '</div>' +
+                '<button class="btn btn-ghost" data-act="close" type="button" title="Cerrar">&times;</button>' +
+            '</div>' +
+            '<div class="modal-body">' +
+                '<p style="font-size:.88rem;color:var(--muted);line-height:1.5;margin:0;">' +
+                    'El calculador toma todos los disparos de un mes y, opcionalmente, de una guardia. ' +
+                    'A cada disparo le asigna un <strong>valor base</strong> (editable, por defecto $1.000) ' +
+                    'y lo multiplica por un <strong>factor</strong> que depende del tiempo de espera en segundos: ' +
+                    'cuanto más rápido se atiende el disparo, mayor es el factor. El total mostrado al pie es la suma de ' +
+                    '<code>valor base × factor</code> de cada fila.' +
+                '</p>' +
+                '<p style="font-size:.85rem;color:var(--muted);margin:0;">' +
+                    'Los disparos sin espera registrada no suman al total.' +
+                '</p>' +
+                '<div class="table-card" style="max-height:none;">' +
+                    '<table><thead><tr>' +
+                        '<th>Espera (s)</th>' +
+                        '<th style="text-align:right;">Factor</th>' +
+                    '</tr></thead><tbody>' + filas + '</tbody></table>' +
+                '</div>' +
+            '</div>' +
+            '<div class="modal-footer">' +
+                '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+            '</div>' +
+        '</div></div>';
+    }
+
     function formatearPesos(n) {
         try {
             return '$' + new Intl.NumberFormat('es-AR', { maximumFractionDigits: 0 }).format(n);
@@ -3283,15 +3519,15 @@
     // Multiplicador por tiempo de espera (segundos).
     //   00–10 → 2.0   10–20 → 1.8   20–30 → 1.6   30–40 → 1.4   40–50 → 1.2
     //   50–60 → 1.0   60–70 → 0.9   70–80 → 0.8   80–90 → 0.7   90–100 → 0.6
-    //   100–110 → 0.5     ≥110 → 0   (no aplica)
+    //   ≥100 → 0.5    (piso fijo, sin tope superior)
     // Devuelve `null` si no hay espera registrada.
     function disparoFactor(espera) {
         if (espera == null || espera === '') return null;
         var s = parseFloat(espera);
         if (!isFinite(s) || s < 0) return null;
-        var tabla = [2.0, 1.8, 1.6, 1.4, 1.2, 1.0, 0.9, 0.8, 0.7, 0.6, 0.5];
+        var tabla = [2.0, 1.8, 1.6, 1.4, 1.2, 1.0, 0.9, 0.8, 0.7, 0.6];
         var bucket = Math.floor(s / 10);
-        return bucket < tabla.length ? tabla[bucket] : 0;
+        return bucket < tabla.length ? tabla[bucket] : 0.5;
     }
 
     function actualizarBadgeFiltrosDisparos() {
@@ -3802,6 +4038,16 @@
             }
         });
 
+        var calcAyudaModal = document.getElementById('dspCalcAyudaModal');
+        document.getElementById('dspCalcAyuda').addEventListener('click', function () {
+            calcAyudaModal.classList.add('open');
+        });
+        calcAyudaModal.addEventListener('click', function (ev) {
+            if (ev.target === calcAyudaModal || ev.target.closest('[data-act="close"]')) {
+                calcAyudaModal.classList.remove('open');
+            }
+        });
+
         function abrirCalculador() {
             calcModal.classList.add('open');
             recalcular();
@@ -4130,22 +4376,27 @@
 
     // -------- Vista: Señales (solo lectura) -------------------------------
 
-    var senalesFiltros = {
-        sort:      'fecha',
+    var senalesFiltrosDefault = {
+        sort:      'id',
         dir:       'desc',
-        limit:     200,
-        q:         '',
-        estado:    '',
-        prioridad: '',
+        limit:     100,
+        filtro_id: '',
         sentido:   '',
+        prioridad: '',
+        estado:    '',
         procesada: '',
         desde:     '',
         hasta:     ''
     };
+    var senalesFiltros         = Object.assign({}, senalesFiltrosDefault);
+    var senalesFiltrosSnapshot = null;
+    var senalesRegistroCache   = {};
 
     function senalesQueryString() {
+        // `filtro_id` se aplica client-side (el endpoint no acepta filtro por id).
         var qs = [];
         Object.keys(senalesFiltros).forEach(function (k) {
+            if (k === 'filtro_id') return;
             var v = senalesFiltros[k];
             if (v !== '' && v != null) {
                 qs.push(encodeURIComponent(k) + '=' + encodeURIComponent(v));
@@ -4154,224 +4405,460 @@
         return qs.length ? ('?' + qs.join('&')) : '';
     }
 
+    function senalesFiltrosActivos() {
+        var n = 0;
+        Object.keys(senalesFiltrosDefault).forEach(function (k) {
+            if (k === 'sort' || k === 'dir' || k === 'limit') return;
+            if (String(senalesFiltros[k]) !== String(senalesFiltrosDefault[k])) n++;
+        });
+        return n;
+    }
+
     async function renderSenales(view) {
         var data    = await api('/api/senales.php' + senalesQueryString());
         var senales = data.senales || [];
         var kpis    = data.kpis    || {};
-
-        var filtrosActivos = ['estado', 'prioridad', 'sentido', 'procesada', 'desde', 'hasta']
-            .reduce(function (n, k) { return n + (senalesFiltros[k] !== '' ? 1 : 0); }, 0);
-        var badgeFiltros = filtrosActivos
-            ? ' <span class="badge badge-info" style="margin-left:6px;">' + filtrosActivos + '</span>'
-            : '';
+        senalesRegistroCache = {};
+        senales.forEach(function (s) { senalesRegistroCache[s.id] = s; });
 
         view.innerHTML =
-            '<div class="page-header"><div>' +
-                '<h1>Señales</h1>' +
-                '<p>Bitácora de señales recibidas y procesadas por la plataforma.</p>' +
-            '</div></div>' +
+            moduleHelpSenalesHtml() +
 
-            '<div class="stats-bar">' +
-                statCard('Total',      kpis.total      || 0, 'orange', 'Señales registradas') +
-                statCard('Pendientes', kpis.pendientes || 0, 'red',    'Sin procesar') +
-                statCard('Hoy',        kpis.hoy        || 0, 'green',  'Recibidas hoy') +
-            '</div>' +
+            '<div class="stats-bar" id="senStats">' + renderSenalesStats(kpis) + '</div>' +
 
-            '<div class="toolbar">' +
-                '<div class="toolbar-left">' +
-                    '<div class="search-wrap">' +
-                        '<input type="search" id="senSearch" class="search-input" placeholder="Buscar texto o propagación..." value="' + e(senalesFiltros.q) + '">' +
-                        '<button class="search-clear" id="senSearchClear" type="button" style="' + (senalesFiltros.q ? '' : 'display:none;') + '">&times;</button>' +
-                    '</div>' +
-                    '<button class="btn btn-secondary" id="senFiltros" type="button">' +
-                        '<i class="fa-solid fa-filter"></i> Filtros' + badgeFiltros +
-                    '</button>' +
-                '</div>' +
-                '<div class="toolbar-right">' +
-                    '<button class="btn btn-secondary" id="senMonitor" type="button" ' +
-                            'title="Monitor en tiempo real de señales entrantes">' +
-                        '<i class="fa-solid fa-tower-broadcast"></i> Ver en tiempo real' +
-                    '</button>' +
-                '</div>' +
-            '</div>' +
+            toolbarSenalesHtml() +
 
             '<div class="table-card">' +
                 '<table><thead><tr>' +
-                    '<th>ID</th><th>Fecha</th><th>Sentido</th><th>Propagación</th>' +
+                    '<th>Código</th><th>Fecha</th><th>Sentido</th><th>Propagación</th>' +
                     '<th>Prioridad</th><th>Texto</th><th>Intentos</th>' +
                     '<th>Procesada</th><th>Estado</th>' +
+                    '<th style="text-align:center;">Acciones</th>' +
                 '</tr></thead><tbody id="senTbody">' +
                 renderFilasSenales(senales) +
                 '</tbody></table>' +
+                '<div class="table-empty" id="senEmpty" style="display:none;">No hay señales que coincidan con la búsqueda.</div>' +
             '</div>' +
-            '<div class="text-muted text-sm" style="margin-top:10px;">' +
-                'Mostrando ' + senales.length + ' resultado(s) (límite ' + senalesFiltros.limit + ').' +
+            '<div class="text-muted text-sm" id="senCount" style="margin-top:10px;">' +
+                senalesCountText(senales.length) +
             '</div>' +
 
-            modalFiltrosSenalesHtml();
+            modalConsultarSenalHtml() +
+            modalFiltrosSenalesHtml() +
+            ctxMenuSenalesHtml();
 
         wireSenalesView();
     }
 
+    function moduleHelpSenalesHtml() {
+        return '<div class="module-help" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin-bottom:16px;box-shadow:var(--shadow);display:flex;gap:14px;align-items:center;">' +
+            '<div style="font-size:1.6rem;line-height:1;">📡</div>' +
+            '<div style="font-size:.88rem;color:var(--muted);line-height:1.45;">' +
+                'Las señales son los paquetes de comunicación que la plataforma intercambia con los equipos, con su contenido, prioridad, intentos y estado de procesamiento.' +
+            '</div>' +
+        '</div>';
+    }
+
+    function renderSenalesStats(kpis) {
+        return statCard('Total',      kpis.total      || 0, 'orange', 'Señales registradas') +
+               statCard('Pendientes', kpis.pendientes || 0, 'red',    'Sin procesar') +
+               statCard('Hoy',        kpis.hoy        || 0, 'green',  'Recibidas hoy');
+    }
+
+    function senalesCountText(n) {
+        return 'Mostrando ' + n + ' resultado(s) (límite ' + senalesFiltros.limit + ').';
+    }
+
+    function toolbarSenalesHtml() {
+        var n = senalesFiltrosActivos();
+        var badge  = '<span class="btn-icon-badge"' + (n ? '' : ' style="display:none;"') + '>' + (n || '') + '</span>';
+        var activo = n ? ' active' : '';
+        return '<div class="toolbar">' +
+            '<div class="toolbar-left" style="gap:8px;flex-wrap:wrap;">' +
+                '<div class="search-wrap">' +
+                    '<input type="search" id="senSearch" class="search-input" placeholder="🔍 Buscar texto, propagación, sentido o estado…">' +
+                    '<button class="search-clear" id="senSearchClear" type="button" style="display:none;">&times;</button>' +
+                '</div>' +
+                '<button class="btn btn-ghost btn-icon' + activo + '" id="senFiltros" type="button" title="Filtros">' +
+                    '<i class="fa-solid fa-filter"></i>' + badge +
+                '</button>' +
+                '<button class="btn btn-ghost btn-icon" id="senRefrescar" type="button" title="Refrescar">' +
+                    '<i class="fa-solid fa-rotate"></i>' +
+                '</button>' +
+            '</div>' +
+            '<div class="toolbar-right">' +
+                '<button class="btn btn-primary" id="senMonitor" type="button" title="Monitor en tiempo real de señales entrantes">' +
+                    '<i class="fa-solid fa-tower-broadcast"></i> Ver en tiempo real' +
+                '</button>' +
+            '</div>' +
+        '</div>';
+    }
+
+    function ctxMenuSenalesHtml() {
+        return '<div id="senCtxMenu" class="ctx-menu" role="menu">' +
+            '<button type="button" data-action="consultar" role="menuitem">' +
+                '<i class="fa-solid fa-eye"></i><span>Consultar</span>' +
+            '</button>' +
+        '</div>';
+    }
+
     function renderFilasSenales(senales) {
         if (!senales.length) {
-            return '<tr><td colspan="9" class="table-empty">No hay señales que coincidan con el filtro.</td></tr>';
+            return '<tr><td colspan="10" class="table-empty">No hay señales cargadas.</td></tr>';
         }
         return senales.map(function (s) {
+            var busq  = String((s.texto || '') + ' ' + (s.propagacion || '') + ' ' + (s.sentido || '') + ' ' + (s.prioridad || '') + ' ' + (s.estado || '')).toLowerCase().trim();
             var texto = (s.texto || '').length > 80 ? (s.texto.substring(0, 80) + '…') : (s.texto || '');
-            return '<tr>' +
+            var procesada = s.procesada
+                ? '<span class="badge badge-success">' + e(abmFecha(s.procesada)) + '</span>'
+                : '<span class="badge badge-warn">Pendiente</span>';
+            return '<tr data-id="' + s.id + '" data-search="' + e(busq) + '" style="cursor:pointer;">' +
                 '<td class="td-id">#' + s.id + '</td>' +
-                '<td>' + e(s.fecha || '—') + '</td>' +
+                '<td>' + e(abmFecha(s.fecha) || '—') + '</td>' +
                 '<td>' + e(s.sentido || '—') + '</td>' +
                 '<td>' + e(s.propagacion || '—') + '</td>' +
                 '<td>' + e(s.prioridad || '—') + '</td>' +
                 '<td title="' + e(s.texto || '') + '">' + e(texto || '—') + '</td>' +
                 '<td>' + (s.intentos != null ? e(String(s.intentos)) : '—') + '</td>' +
-                '<td>' +
-                    (s.procesada
-                        ? '<span class="badge badge-success">' + e(s.procesada) + '</span>'
-                        : '<span class="badge badge-warn">Pendiente</span>') +
-                '</td>' +
+                '<td>' + procesada + '</td>' +
                 '<td>' + e(s.estado || '—') + '</td>' +
+                '<td style="text-align:center;">' +
+                    '<div class="actions" style="justify-content:center;">' +
+                        '<button class="btn-icon-sm" data-act="menu" type="button" title="Más acciones">' +
+                            '<i class="fa-solid fa-bars"></i>' +
+                        '</button>' +
+                    '</div>' +
+                '</td>' +
             '</tr>';
         }).join('');
     }
 
-    function modalFiltrosSenalesHtml() {
-        function selOpt(value, label, current) {
-            var sel = String(current) === String(value) ? ' selected' : '';
-            return '<option value="' + e(value) + '"' + sel + '>' + e(label) + '</option>';
-        }
-        return '<div class="modal-backdrop" id="senFiltrosModal"><div class="modal">' +
+    function modalConsultarSenalHtml() {
+        return '<div class="modal-backdrop" id="senConsultar"><div class="modal">' +
             '<div class="modal-header">' +
-                '<div class="modal-title"><span>Filtros</span></div>' +
+                '<div class="modal-title">' +
+                    '<span>Consultar señal</span>' +
+                    '<span class="modal-subtitle" id="senConsultarSub"></span>' +
+                '</div>' +
                 '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
             '</div>' +
-            '<form id="senFiltrosForm" novalidate>' +
-                '<div class="modal-body">' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="sflt-sentido">Sentido</label>' +
-                            '<input id="sflt-sentido" type="text" maxlength="1" value="' + e(senalesFiltros.sentido) + '" placeholder="1 carácter"></div>' +
-                        '<div class="form-group"><label for="sflt-prioridad">Prioridad</label>' +
-                            '<input id="sflt-prioridad" type="text" maxlength="1" value="' + e(senalesFiltros.prioridad) + '" placeholder="1 carácter"></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="sflt-estado">Estado</label>' +
-                            '<input id="sflt-estado" type="text" maxlength="1" value="' + e(senalesFiltros.estado) + '" placeholder="1 carácter"></div>' +
-                        '<div class="form-group"><label for="sflt-procesada">Procesada</label>' +
-                            '<select id="sflt-procesada">' +
-                                selOpt('',   'Todas',       senalesFiltros.procesada) +
-                                selOpt('si', 'Procesadas',  senalesFiltros.procesada) +
-                                selOpt('no', 'Pendientes',  senalesFiltros.procesada) +
-                            '</select></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="sflt-desde">Desde</label>' +
-                            '<input id="sflt-desde" type="date" value="' + e(senalesFiltros.desde) + '"></div>' +
-                        '<div class="form-group"><label for="sflt-hasta">Hasta</label>' +
-                            '<input id="sflt-hasta" type="date" value="' + e(senalesFiltros.hasta) + '"></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="sflt-sort">Ordenar por</label>' +
-                            '<select id="sflt-sort">' +
-                                selOpt('fecha',     'Fecha',     senalesFiltros.sort) +
-                                selOpt('id',        'ID',        senalesFiltros.sort) +
-                                selOpt('procesada', 'Procesada', senalesFiltros.sort) +
-                                selOpt('intentos',  'Intentos',  senalesFiltros.sort) +
-                            '</select></div>' +
-                        '<div class="form-group"><label for="sflt-dir">Dirección</label>' +
-                            '<select id="sflt-dir">' +
-                                selOpt('desc', 'Descendente', senalesFiltros.dir) +
-                                selOpt('asc',  'Ascendente',  senalesFiltros.dir) +
-                            '</select></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="sflt-limit">Límite de resultados</label>' +
-                            '<select id="sflt-limit">' +
-                                selOpt('50',   '50',   senalesFiltros.limit) +
-                                selOpt('100',  '100',  senalesFiltros.limit) +
-                                selOpt('200',  '200',  senalesFiltros.limit) +
-                                selOpt('500',  '500',  senalesFiltros.limit) +
-                                selOpt('1000', '1000', senalesFiltros.limit) +
-                            '</select></div>' +
-                    '</div>' +
-                '</div>' +
-                '<div class="modal-footer">' +
-                    '<button type="button" class="btn btn-ghost"     id="senFiltrosReset">Limpiar</button>' +
-                    '<button type="button" class="btn btn-secondary" data-act="close"   >Cancelar</button>' +
-                    '<button type="submit"  class="btn btn-primary"                      >Aplicar</button>' +
-                '</div>' +
-            '</form>' +
+            '<div class="modal-body">' +
+                '<dl class="data-list" id="senConsultarBody"></dl>' +
+            '</div>' +
+            '<div class="modal-footer">' +
+                '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+            '</div>' +
         '</div></div>';
     }
 
-    function wireSenalesView() {
-        var searchInput  = document.getElementById('senSearch');
-        var searchClear  = document.getElementById('senSearchClear');
-        var filtrosModal = document.getElementById('senFiltrosModal');
-        var filtrosForm  = document.getElementById('senFiltrosForm');
+    function modalFiltrosSenalesHtml() {
+        return '<div class="modal-backdrop" id="senFiltrosModal"><div class="modal" style="max-width:560px;">' +
+            '<div class="modal-header">' +
+                '<div class="modal-title"><i class="fa-solid fa-filter"></i> Filtros</div>' +
+                '<button class="btn btn-ghost" data-act="cerrar" type="button" title="Cerrar">&times;</button>' +
+            '</div>' +
+            '<div class="modal-body">' +
+                '<div class="form-row">' +
+                    '<div class="form-group"><label for="sflt-id">Código</label>' +
+                        '<input id="sflt-id" type="number" min="1" step="1" inputmode="numeric" placeholder="ID de la señal…"></div>' +
+                    '<div class="form-group"><label for="sflt-sentido">Sentido</label>' +
+                        '<input id="sflt-sentido" type="text" maxlength="1" placeholder="1 carácter"></div>' +
+                '</div>' +
+                '<div class="form-row">' +
+                    '<div class="form-group"><label for="sflt-prioridad">Prioridad</label>' +
+                        '<input id="sflt-prioridad" type="text" maxlength="1" placeholder="1 carácter"></div>' +
+                    '<div class="form-group"><label for="sflt-estado">Estado</label>' +
+                        '<input id="sflt-estado" type="text" maxlength="1" placeholder="1 carácter"></div>' +
+                '</div>' +
+                '<div class="form-group">' +
+                    '<label>Estado del registro</label>' +
+                    '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+                        '<button type="button" class="filter-chip" data-chip="procesada" data-value=""  >Todas</button>' +
+                        '<button type="button" class="filter-chip" data-chip="procesada" data-value="no">Pendientes</button>' +
+                        '<button type="button" class="filter-chip" data-chip="procesada" data-value="si">Procesadas</button>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="form-row">' +
+                    '<div class="form-group"><label for="sflt-desde">Desde</label>' +
+                        '<input id="sflt-desde" type="date"></div>' +
+                    '<div class="form-group"><label for="sflt-hasta">Hasta</label>' +
+                        '<input id="sflt-hasta" type="date"></div>' +
+                '</div>' +
+                '<div class="form-row form-row-3">' +
+                    '<div class="form-group"><label for="sflt-limit">Límite</label>' +
+                        '<input id="sflt-limit" type="number" min="1" max="1000" step="1" inputmode="numeric"></div>' +
+                    '<div class="form-group"><label for="sflt-sort">Ordenar por</label>' +
+                        '<select id="sflt-sort">' +
+                            '<option value="id">Código</option>' +
+                            '<option value="fecha">Fecha</option>' +
+                            '<option value="procesada">Procesada</option>' +
+                            '<option value="intentos">Intentos</option>' +
+                        '</select></div>' +
+                    '<div class="form-group"><label for="sflt-dir">Dirección</label>' +
+                        '<select id="sflt-dir">' +
+                            '<option value="desc">Descendente</option>' +
+                            '<option value="asc">Ascendente</option>' +
+                        '</select></div>' +
+                '</div>' +
+            '</div>' +
+            '<div class="modal-footer">' +
+                '<button type="button" class="btn btn-ghost"   data-act="cerrar"  >Cerrar</button>' +
+                '<button type="button" class="btn btn-ghost"   data-act="limpiar" >Limpiar</button>' +
+                '<button type="button" class="btn btn-primary" data-act="aplicar" >Aplicar</button>' +
+            '</div>' +
+        '</div></div>';
+    }
 
-        var searchTimer = null;
-        function dispatchSearch() {
-            senalesFiltros.q = searchInput.value.trim();
-            searchClear.style.display = senalesFiltros.q ? '' : 'none';
-            navigate();
+    function actualizarBadgeFiltrosSenales() {
+        var btn = document.getElementById('senFiltros');
+        if (!btn) return;
+        var badge = btn.querySelector('.btn-icon-badge');
+        var n = senalesFiltrosActivos();
+        btn.classList.toggle('active', n > 0);
+        if (badge) {
+            badge.textContent = n || '';
+            badge.style.display = n ? '' : 'none';
         }
-        searchInput.addEventListener('input', function () {
-            if (searchTimer) clearTimeout(searchTimer);
-            searchTimer = setTimeout(dispatchSearch, 350);
-        });
-        searchInput.addEventListener('keydown', function (ev) {
-            if (ev.key === 'Enter') {
-                ev.preventDefault();
-                if (searchTimer) clearTimeout(searchTimer);
-                dispatchSearch();
+    }
+
+    async function recargarSenalesLista() {
+        try {
+            var data    = await api('/api/senales.php' + senalesQueryString());
+            var senales = data.senales || [];
+            var kpis    = data.kpis    || {};
+            senalesRegistroCache = {};
+            senales.forEach(function (s) { senalesRegistroCache[s.id] = s; });
+
+            var stats = document.getElementById('senStats');
+            var tbody = document.getElementById('senTbody');
+            var count = document.getElementById('senCount');
+            if (stats) stats.innerHTML = renderSenalesStats(kpis);
+            if (tbody) tbody.innerHTML = renderFilasSenales(senales);
+            if (count) count.textContent = senalesCountText(senales.length);
+
+            actualizarBadgeFiltrosSenales();
+            var searchInput = document.getElementById('senSearch');
+            if (searchInput) searchInput.dispatchEvent(new Event('input'));
+        } catch (err) {
+            toast(err.message, true);
+        }
+    }
+
+    function wireSenalesView() {
+        var tbody       = document.getElementById('senTbody');
+        var emptyState  = document.getElementById('senEmpty');
+        var searchInput = document.getElementById('senSearch');
+        var searchClear = document.getElementById('senSearchClear');
+
+        var filtrosModal   = document.getElementById('senFiltrosModal');
+        var consultarModal = document.getElementById('senConsultar');
+        var consultarSub   = document.getElementById('senConsultarSub');
+        var consultarBody  = document.getElementById('senConsultarBody');
+
+        var ctxMenu = document.getElementById('senCtxMenu');
+        var ctxId   = null;
+
+        // --- Búsqueda rápida cliente + filtro por Código (client-side) -----
+        function applyClientFilter() {
+            var q = searchInput.value.trim().toLowerCase();
+            var codFilter = String(senalesFiltros.filtro_id || '').trim();
+            var visibles = 0;
+            tbody.querySelectorAll('tr[data-id]').forEach(function (tr) {
+                var haystack = tr.dataset.search || '';
+                var matchQ   = !q || haystack.indexOf(q) !== -1;
+                var matchCod = !codFilter || tr.dataset.id === codFilter;
+                var show = matchQ && matchCod;
+                tr.style.display = show ? '' : 'none';
+                if (show) visibles++;
+            });
+            if (emptyState) {
+                var hayFilas = !!tbody.querySelector('tr[data-id]');
+                emptyState.style.display = (visibles === 0 && hayFilas) ? '' : 'none';
             }
-        });
+            if (searchClear) searchClear.style.display = q ? '' : 'none';
+        }
+        searchInput.addEventListener('input', applyClientFilter);
         searchClear.addEventListener('click', function () {
             searchInput.value = '';
-            if (searchTimer) clearTimeout(searchTimer);
-            dispatchSearch();
+            applyClientFilter();
             searchInput.focus();
         });
 
+        // --- Refrescar ------------------------------------------------------
+        document.getElementById('senRefrescar').addEventListener('click', recargarSenalesLista);
+
+        // --- Ver en tiempo real --------------------------------------------
         document.getElementById('senMonitor').addEventListener('click', openSenalesLiveMonitorModal);
 
-        document.getElementById('senFiltros').addEventListener('click', function () {
+        // --- Modal de filtros (live apply + snapshot) ----------------------
+        var fId    = document.getElementById('sflt-id');
+        var fSen   = document.getElementById('sflt-sentido');
+        var fPrio  = document.getElementById('sflt-prioridad');
+        var fEst   = document.getElementById('sflt-estado');
+        var fDesde = document.getElementById('sflt-desde');
+        var fHasta = document.getElementById('sflt-hasta');
+        var fLimit = document.getElementById('sflt-limit');
+        var fSort  = document.getElementById('sflt-sort');
+        var fDir   = document.getElementById('sflt-dir');
+        var fChips = filtrosModal.querySelectorAll('.filter-chip[data-chip="procesada"]');
+
+        function sincronizarControlesFiltros() {
+            fId.value    = senalesFiltros.filtro_id;
+            fSen.value   = senalesFiltros.sentido;
+            fPrio.value  = senalesFiltros.prioridad;
+            fEst.value   = senalesFiltros.estado;
+            fDesde.value = senalesFiltros.desde;
+            fHasta.value = senalesFiltros.hasta;
+            fLimit.value = senalesFiltros.limit;
+            fSort.value  = senalesFiltros.sort;
+            fDir.value   = senalesFiltros.dir;
+            fChips.forEach(function (c) {
+                c.classList.toggle('active', c.dataset.value === String(senalesFiltros.procesada || ''));
+            });
+        }
+        function abrirModalFiltros() {
+            senalesFiltrosSnapshot = Object.assign({}, senalesFiltros);
+            sincronizarControlesFiltros();
             filtrosModal.classList.add('open');
-        });
+        }
+        function cerrarModalFiltros() { filtrosModal.classList.remove('open'); }
+        function cancelarFiltros() {
+            if (senalesFiltrosSnapshot) {
+                Object.keys(senalesFiltrosSnapshot).forEach(function (k) {
+                    senalesFiltros[k] = senalesFiltrosSnapshot[k];
+                });
+                senalesFiltrosSnapshot = null;
+                recargarSenalesLista();
+            }
+            cerrarModalFiltros();
+        }
+        function limpiarFiltros() {
+            Object.assign(senalesFiltros, senalesFiltrosDefault);
+            sincronizarControlesFiltros();
+            recargarSenalesLista();
+        }
+
+        document.getElementById('senFiltros').addEventListener('click', abrirModalFiltros);
         filtrosModal.addEventListener('click', function (ev) {
-            if (ev.target === filtrosModal || ev.target.closest('[data-act="close"]')) {
-                filtrosModal.classList.remove('open');
+            if (ev.target === filtrosModal) { cancelarFiltros(); return; }
+            var b = ev.target.closest('button[data-act]');
+            if (!b) return;
+            if (b.dataset.act === 'cerrar')  cancelarFiltros();
+            if (b.dataset.act === 'limpiar') limpiarFiltros();
+            if (b.dataset.act === 'aplicar') { senalesFiltrosSnapshot = null; cerrarModalFiltros(); }
+        });
+
+        // Live apply: `filtro_id` filtra client-side; el resto reconsulta el backend.
+        function liveApply(field, valueGetter, clientOnly) {
+            return function () {
+                senalesFiltros[field] = valueGetter();
+                if (clientOnly) {
+                    actualizarBadgeFiltrosSenales();
+                    applyClientFilter();
+                } else {
+                    recargarSenalesLista();
+                }
+            };
+        }
+        fId.addEventListener('input',     liveApply('filtro_id', function () { return fId.value.trim(); }, true));
+        fSen.addEventListener('input',    liveApply('sentido',   function () { return fSen.value.trim(); }));
+        fPrio.addEventListener('input',   liveApply('prioridad', function () { return fPrio.value.trim(); }));
+        fEst.addEventListener('input',    liveApply('estado',    function () { return fEst.value.trim(); }));
+        fDesde.addEventListener('change', liveApply('desde',     function () { return fDesde.value; }));
+        fHasta.addEventListener('change', liveApply('hasta',     function () { return fHasta.value; }));
+        fLimit.addEventListener('change', liveApply('limit',     function () { return parseInt(fLimit.value, 10) || 100; }));
+        fSort.addEventListener('change',  liveApply('sort',      function () { return fSort.value || 'id'; }));
+        fDir.addEventListener('change',   liveApply('dir',       function () { return fDir.value  || 'desc'; }));
+        fChips.forEach(function (chip) {
+            chip.addEventListener('click', function () {
+                senalesFiltros.procesada = chip.dataset.value;
+                fChips.forEach(function (c) { c.classList.toggle('active', c === chip); });
+                recargarSenalesLista();
+            });
+        });
+
+        // --- Menú contextual de fila ----------------------------------------
+        function cerrarCtxMenu() {
+            ctxMenu.classList.remove('open');
+            ctxId = null;
+        }
+        function abrirCtxMenu(x, y, id) {
+            ctxId = id;
+            ctxMenu.classList.add('open');
+            var rect = ctxMenu.getBoundingClientRect();
+            var w = rect.width, h = rect.height;
+            var vw = window.innerWidth, vh = window.innerHeight;
+            ctxMenu.style.left = Math.max(8, Math.min(x, vw - w - 8)) + 'px';
+            ctxMenu.style.top  = Math.max(8, Math.min(y, vh - h - 8)) + 'px';
+        }
+        ctxMenu.addEventListener('click', function (ev) {
+            var b = ev.target.closest('button[data-action]');
+            if (!b || ctxId == null) return;
+            var id = ctxId;
+            cerrarCtxMenu();
+            if (b.dataset.action === 'consultar') abrirConsulta(id);
+        });
+
+        document.addEventListener('click', function (ev) {
+            if (ctxMenu.classList.contains('open') && !ctxMenu.contains(ev.target)) cerrarCtxMenu();
+        });
+        document.addEventListener('scroll',  function () { cerrarCtxMenu(); }, true);
+        window.addEventListener('resize',    function () { cerrarCtxMenu(); });
+        document.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Escape') cerrarCtxMenu();
+        });
+
+        // --- Filas: clic = Consultar, hamburguesa / click derecho = ctx ----
+        tbody.addEventListener('click', function (ev) {
+            var tr = ev.target.closest('tr[data-id]');
+            if (!tr) return;
+            var id = parseInt(tr.dataset.id, 10);
+            var btn = ev.target.closest('button[data-act="menu"]');
+            if (btn) {
+                ev.stopPropagation();
+                var rect = btn.getBoundingClientRect();
+                abrirCtxMenu(rect.right - 200, rect.bottom + 4, id);
+                return;
+            }
+            if (ev.target.closest('a,input,select,button')) return;
+            abrirConsulta(id);
+        });
+        tbody.addEventListener('contextmenu', function (ev) {
+            var tr = ev.target.closest('tr[data-id]');
+            if (!tr) return;
+            ev.preventDefault();
+            var id = parseInt(tr.dataset.id, 10);
+            abrirCtxMenu(ev.clientX, ev.clientY, id);
+        });
+
+        // --- Modal Consultar -----------------------------------------------
+        consultarModal.addEventListener('click', function (ev) {
+            if (ev.target === consultarModal || ev.target.closest('[data-act="close"]')) {
+                consultarModal.classList.remove('open');
             }
         });
-        document.getElementById('senFiltrosReset').addEventListener('click', function () {
-            senalesFiltros.sort      = 'fecha';
-            senalesFiltros.dir       = 'desc';
-            senalesFiltros.limit     = 200;
-            senalesFiltros.estado    = '';
-            senalesFiltros.prioridad = '';
-            senalesFiltros.sentido   = '';
-            senalesFiltros.procesada = '';
-            senalesFiltros.desde     = '';
-            senalesFiltros.hasta     = '';
-            filtrosModal.classList.remove('open');
-            navigate();
-        });
-        filtrosForm.addEventListener('submit', function (ev) {
-            ev.preventDefault();
-            senalesFiltros.sentido   = document.getElementById('sflt-sentido').value.trim();
-            senalesFiltros.prioridad = document.getElementById('sflt-prioridad').value.trim();
-            senalesFiltros.estado    = document.getElementById('sflt-estado').value.trim();
-            senalesFiltros.procesada = document.getElementById('sflt-procesada').value;
-            senalesFiltros.desde     = document.getElementById('sflt-desde').value;
-            senalesFiltros.hasta     = document.getElementById('sflt-hasta').value;
-            senalesFiltros.sort      = document.getElementById('sflt-sort').value || 'fecha';
-            senalesFiltros.dir       = document.getElementById('sflt-dir').value  || 'desc';
-            senalesFiltros.limit     = parseInt(document.getElementById('sflt-limit').value, 10) || 200;
-            filtrosModal.classList.remove('open');
-            navigate();
-        });
+
+        function abrirConsulta(id) {
+            var s = senalesRegistroCache[id];
+            if (!s) { toast('Señal #' + id + ' no encontrada.', true); return; }
+            var procesada = s.procesada
+                ? '<span class="badge badge-success">' + e(abmFecha(s.procesada)) + '</span>'
+                : '<span class="badge badge-warn">Pendiente</span>';
+            consultarSub.innerHTML  = '<code>#' + s.id + '</code>';
+            consultarBody.innerHTML =
+                abmRow    ('Código',      '<code>#' + s.id + '</code>') +
+                abmRowTxt ('Fecha',       abmFecha(s.fecha), 'Sin fecha') +
+                abmRowTxt ('Sentido',     s.sentido,         'Sin sentido') +
+                abmRowTxt ('Propagación', s.propagacion,     'Sin propagación') +
+                abmRowTxt ('Prioridad',   s.prioridad,       'Sin prioridad') +
+                abmRowNum ('Intentos',    s.intentos,        'Sin intentos') +
+                abmRow    ('Procesada',   procesada) +
+                abmRowTxt ('Estado',      s.estado,          'Sin estado') +
+                abmRowTxt ('Texto',       s.texto,           'Sin texto', true);
+            consultarModal.classList.add('open');
+        }
+
+        actualizarBadgeFiltrosSenales();
     }
 
     /* Modal "Monitor en tiempo real" (Señales).
