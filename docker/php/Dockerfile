@@ -1,8 +1,19 @@
 FROM php:8.2-apache
 
-# Extensiones requeridas por las apps PHP
-RUN docker-php-ext-install pdo pdo_mysql mysqli \
+# Extensiones requeridas por las apps PHP.
+# pcntl + posix son para el Programador de tareas (cloud/jobs):
+#   - pcntl: handler de SIGTERM en _bootstrap.php para cerrar la fila de
+#     tareas_ejecuciones al instante cuando `timeout` dispara.
+#   - posix: posix_kill() para el botón "Detener" y el watchdog.
+RUN docker-php-ext-install pdo pdo_mysql mysqli pcntl \
  && a2enmod rewrite headers expires
+
+# Directorio de logs por-ejecución del Programador de tareas.
+# Lo escriben dos usuarios: www-data (endpoint "Ejecutar ahora") y el
+# usuario del scheduler (docker exec desde el crontab del host).
+RUN mkdir -p /var/log/vigicom/cloud/ejecuciones \
+ && chown -R www-data:www-data /var/log/vigicom \
+ && chmod -R 755 /var/log/vigicom
 
 # Permitir que los .htaccess de cada app tomen efecto
 RUN sed -i 's|AllowOverride None|AllowOverride All|g' /etc/apache2/apache2.conf

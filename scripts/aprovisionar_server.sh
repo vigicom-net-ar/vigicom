@@ -60,9 +60,13 @@ echo "[ 1/9 ] Actualizando sistema..."
 sudo dnf update -y -q
 echo "        OK"
 
-# ---- 2. Instalar Docker, Git, Nginx, bind-utils, python3 ----
-echo "[ 2/9 ] Instalando Docker, Nginx, bind-utils, python3..."
-sudo dnf install -y -q docker git nginx bind-utils python3 python3-pip augeas-libs
+# ---- 2. Instalar Docker, Git, Nginx, bind-utils, python3, cronie ----
+# cronie es para el Programador de tareas (cloud/jobs): el tick minutal del
+# scheduler y el cleanup nocturno se disparan desde /etc/cron.d/vigicom-cloud.
+echo "[ 2/9 ] Instalando Docker, Nginx, bind-utils, python3, cronie..."
+sudo dnf install -y -q docker git nginx bind-utils python3 python3-pip augeas-libs cronie
+sudo systemctl enable crond
+sudo systemctl start crond
 sudo systemctl enable docker nginx
 sudo systemctl start docker
 sudo usermod -aG docker ec2-user
@@ -335,6 +339,29 @@ if [ ! -f /etc/cron.d/certbot ]; then
     echo "0 0,12 * * * root /opt/certbot/bin/python -c 'import random; import time; time.sleep(random.random() * 3600)' && /usr/bin/certbot renew -q" \
         | sudo tee /etc/cron.d/certbot > /dev/null
     echo "        Cron de renovacion creado en /etc/cron.d/certbot"
+fi
+
+# ---- Setup del Programador de tareas (cloud/jobs) ----
+# Estatico: se corre una vez al aprovisionar el server. El crontab del
+# proyecto vive en cloud/jobs/crontab (versionado en el repo) y se copia
+# a /etc/cron.d/vigicom-cloud. cron detecta el archivo en el proximo tick
+# minutal -- no hace falta reload manual.
+#
+# El deploy NO toca esto porque las 3 lineas del crontab nunca cambian
+# (scheduler + cleanup + rotacion); las tareas concretas se administran
+# desde la tabla `tareas` de la BD, via Herramientas > Programador de tareas.
+echo "[ + ] Configurando Programador de tareas (cron + log dir)..."
+sudo mkdir -p /var/log/vigicom/cloud
+sudo chmod 755 /var/log/vigicom /var/log/vigicom/cloud
+sudo touch /var/log/vigicom/cloud/scheduler.log
+sudo chmod 644 /var/log/vigicom/cloud/scheduler.log
+if [ -f "$APP_DIR/cloud/jobs/crontab" ]; then
+    sudo cp "$APP_DIR/cloud/jobs/crontab" /etc/cron.d/vigicom-cloud
+    sudo chown root:root /etc/cron.d/vigicom-cloud
+    sudo chmod 644 /etc/cron.d/vigicom-cloud
+    echo "        OK -- /etc/cron.d/vigicom-cloud instalado"
+else
+    echo "        AVISO: no encontre $APP_DIR/cloud/jobs/crontab -- el scheduler no correra."
 fi
 
 echo ""

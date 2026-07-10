@@ -1,0 +1,16 @@
+# cloud/jobs/crontab — se instala en /etc/cron.d/vigicom-cloud
+#
+# El aprovisionar_server.sh copia este archivo. `deploy.sh` no toca cron:
+# el crontab es estático (3 líneas) y las tareas concretas viven en la
+# tabla `tareas` de la BD (ABM desde el back office).
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Tick minutal — el scheduler decide qué disparar.
+* * * * * root docker exec vigicom-apache php /var/www/cloud/jobs/_scheduler.php >> /var/log/vigicom/cloud/scheduler.log 2>&1
+
+# Cleanup nocturno por retencion_dias de cada tarea.
+0 3 * * * root docker exec vigicom-apache php /var/www/cloud/jobs/_cleanup_logs.php >> /var/log/vigicom/cloud/scheduler.log 2>&1
+
+# Rotación blanda del log del propio scheduler.
+5 3 * * * root find /var/log/vigicom/cloud/scheduler.log -size +10M -exec truncate -s 0 {} \; 2>/dev/null

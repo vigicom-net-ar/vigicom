@@ -2231,6 +2231,20 @@ CREATE TABLE `financiaciones`  (
 ) ENGINE = InnoDB AUTO_INCREMENT = 1167 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
 
 -- ----------------------------
+-- Table structure for grafico_cobros
+-- ----------------------------
+DROP TABLE IF EXISTS `grafico_cobros`;
+CREATE TABLE `grafico_cobros`  (
+  `id` int(0) NOT NULL AUTO_INCREMENT,
+  `mes` varchar(7) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+  `monto` decimal(14, 2) NOT NULL DEFAULT 0.00,
+  `cantidad` int(0) NOT NULL DEFAULT 0,
+  `actualizado` datetime(0) NOT NULL,
+  PRIMARY KEY (`id`) USING BTREE,
+  UNIQUE INDEX `uk_mes`(`mes`) USING BTREE
+) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = 'Cache mensual de cobros (recibos RX) para el Analizador' ROW_FORMAT = Dynamic;
+
+-- ----------------------------
 -- Table structure for grupos
 -- ----------------------------
 DROP TABLE IF EXISTS `grupos`;
@@ -2531,6 +2545,18 @@ CREATE TABLE `medios`  (
   `comentarios` varchar(5000) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL DEFAULT NULL,
   PRIMARY KEY (`id`) USING BTREE
 ) ENGINE = MyISAM AUTO_INCREMENT = 26 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
+
+-- ----------------------------
+-- Table structure for migraciones
+-- ----------------------------
+DROP TABLE IF EXISTS `migraciones`;
+CREATE TABLE `migraciones`  (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `nombre` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL DEFAULT NULL,
+  `hash` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL DEFAULT NULL,
+  `aplicada` datetime(0) NULL DEFAULT NULL,
+  PRIMARY KEY (`id`) USING BTREE
+) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
 
 -- ----------------------------
 -- Table structure for memos
@@ -3488,6 +3514,19 @@ CREATE TABLE `sucesos`  (
   `finalizado` datetime(0) NULL DEFAULT NULL,
   PRIMARY KEY (`id`) USING BTREE
 ) ENGINE = MyISAM AUTO_INCREMENT = 1041477 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
+
+-- ----------------------------
+-- Table structure for sucesos_log
+-- ----------------------------
+DROP TABLE IF EXISTS `sucesos_log`;
+CREATE TABLE `sucesos_log`  (
+  `id` int(0) NOT NULL AUTO_INCREMENT,
+  `fecha` datetime(0) NULL DEFAULT NULL,
+  `origen` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL DEFAULT NULL,
+  `tipo` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'info',
+  `detalle` text CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL,
+  PRIMARY KEY (`id`) USING BTREE
+) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
 
 -- ----------------------------
 -- Table structure for talonarios

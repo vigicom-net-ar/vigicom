@@ -94,6 +94,41 @@ $cssBust = $version === '0.0.dev' ? (string) time() : $version;
                 </div>
             </div>
 
+            <div class="nav-group-wrap" data-group="facturacion">
+                <button type="button" class="nav-item nav-group-toggle">
+                    <span class="nav-icon">🧾</span>
+                    <span class="nav-group-label">Facturación</span>
+                    <span class="nav-group-arrow">+</span>
+                </button>
+                <div class="nav-sub">
+                    <a class="nav-item nav-sub-item" href="#/presupuestos" data-route="/presupuestos">
+                        <span class="nav-icon">📝</span><span>Presupuestos</span>
+                    </a>
+                    <a class="nav-item nav-sub-item" href="#/facturas" data-route="/facturas">
+                        <span class="nav-icon">💵</span><span>Facturas</span>
+                    </a>
+                    <a class="nav-item nav-sub-item" href="#/recibos" data-route="/recibos">
+                        <span class="nav-icon">🧾</span><span>Recibos</span>
+                    </a>
+                    <a class="nav-item nav-sub-item" href="#/talonarios" data-route="/talonarios">
+                        <span class="nav-icon">📚</span><span>Talonarios</span>
+                    </a>
+                </div>
+            </div>
+
+            <div class="nav-group-wrap" data-group="contable">
+                <button type="button" class="nav-item nav-group-toggle">
+                    <span class="nav-icon">📈</span>
+                    <span class="nav-group-label">Contable</span>
+                    <span class="nav-group-arrow">+</span>
+                </button>
+                <div class="nav-sub">
+                    <a class="nav-item nav-sub-item" href="#/analizador" data-route="/analizador">
+                        <span class="nav-icon">🔎</span><span>Analizador</span>
+                    </a>
+                </div>
+            </div>
+
             <div class="nav-group-wrap" data-group="registros">
                 <button type="button" class="nav-item nav-group-toggle">
                     <span class="nav-icon">📝</span>

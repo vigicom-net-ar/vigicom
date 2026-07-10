@@ -25,6 +25,10 @@
     var routes = {
         '/dashboard':    { title: 'Dashboard',     render: renderDashboard },
         '/clientes':     { title: 'Clientes',      render: renderTodo },
+        '/presupuestos': { title: 'Presupuestos',  render: renderPresupuestos },
+        '/facturas':     { title: 'Facturas',      render: renderFacturas },
+        '/recibos':      { title: 'Recibos',       render: renderRecibos },
+        '/talonarios':   { title: 'Talonarios',    render: renderTalonarios },
         '/comunidades':  { title: 'Comunidades',   render: renderComunidades },
         '/casas':        { title: 'Casas',         render: renderCasas },
         '/alarmas':      { title: 'Alarmas',       render: renderAlarmas },
@@ -34,6 +38,7 @@
         '/eventos':      { title: 'Eventos',       render: renderTodo },
         '/senales':      { title: 'Señales',       render: renderSenales },
         '/reportes':     { title: 'Reportes',      render: renderTodo },
+        '/analizador':   { title: 'Analizador',    render: renderAnalizador },
         '/usuarios':     { title: 'Usuarios',      render: renderUsuarios },
         '/roles':        { title: 'Roles',         render: renderRoles },
         '/config':       { title: 'Herramientas',  render: renderConfig }
@@ -134,12 +139,21 @@
     }
 
     var toastTimer = null;
-    function toast(msg, isError) {
+    function toast(msg, opts) {
+        // Compat: segundo argumento acepta bool (isError) o {error, duration}.
+        var isError = false;
+        var duration = 2800;
+        if (typeof opts === 'boolean') {
+            isError = opts;
+        } else if (opts && typeof opts === 'object') {
+            isError = !!opts.error;
+            if (typeof opts.duration === 'number') duration = opts.duration;
+        }
         toastEl.textContent = msg;
-        toastEl.classList.toggle('error', !!isError);
+        toastEl.classList.toggle('error', isError);
         toastEl.classList.add('show');
         if (toastTimer) clearTimeout(toastTimer);
-        toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, 2800);
+        toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, duration);
     }
 
     // -------- Helpers ABM (modal Consultar) -------------------------------
@@ -288,6 +302,937 @@
                     '<span class="stat-value ' + color + '">' + value + '</span>' +
                     '<span class="text-muted text-sm">' + e(hint) + '</span>' +
                 '</div>';
+    }
+
+    // -------- Vista: Analizador (estadísticas comerciales) ----------------
+
+    function fmtMoney(v) {
+        var n = Number(v);
+        if (!isFinite(n)) return '$0';
+        return '$' + n.toLocaleString('es-AR', { maximumFractionDigits: 0 });
+    }
+    function fmtInt(v) {
+        var n = Number(v);
+        if (!isFinite(n)) return '0';
+        return n.toLocaleString('es-AR');
+    }
+    function fmtMes(ym) {
+        if (!ym) return '—';
+        var p = String(ym).split('-');
+        if (p.length !== 2) return String(ym);
+        var meses = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+        var mi = parseInt(p[1], 10) - 1;
+        return (meses[mi] || p[1]) + ' ' + p[0];
+    }
+
+    async function renderAnalizador(view) {
+        var d = await api('/api/analizador.php');
+        var k = d.kpis || {};
+        var porMes  = d.cobros_por_mes  || [];
+        var topCli  = d.top_clientes    || [];
+        var recient = d.comprobantes_recientes || [];
+        var cobrosActualizado = d.cobros_actualizado || null;
+
+        var maxMes = porMes.reduce(function (m, r) {
+            var t = Number(r.total) || 0;
+            return t > m ? t : m;
+        }, 0);
+
+        var subtituloCobros = cobrosActualizado
+            ? 'Últimos 12 meses · Actualizado ' + timeAgo(String(cobrosActualizado).replace(' ', 'T'))
+            : 'Últimos 12 meses · Sin datos, presioná Refrescar';
+
+        view.innerHTML =
+            '<div class="page-header"><div>' +
+                '<h1>Analizador</h1>' +
+                '<p>Estadísticas comerciales del negocio.</p>' +
+            '</div></div>' +
+
+            '<div class="stats-bar">' +
+                statCard('Facturado 30 días', fmtMoney(k.facturado_30d || 0), 'orange',
+                         fmtInt(k.comprobantes_30d || 0) + ' comprobantes') +
+                statCard('Facturado año',     fmtMoney(k.facturado_anio || 0), 'green',
+                         fmtInt(k.comprobantes_anio || 0) + ' comprobantes') +
+                statCard('Ticket promedio',   fmtMoney(k.ticket_promedio_30d || 0), 'orange',
+                         'Últimos 30 días') +
+                statCard('Clientes activos',  fmtInt(k.clientes_activos || 0), 'green',
+                         fmtInt(k.clientes_con_deuda || 0) + ' con deuda') +
+            '</div>' +
+
+            '<div class="dash-grid">' +
+                '<div class="table-card">' +
+                    '<div class="dash-table-header">' +
+                        '<div><div>Cobros por mes</div>' +
+                        '<div class="text-muted text-sm" style="font-weight:400;">' + e(subtituloCobros) + '</div></div>' +
+                        '<button type="button" class="btn btn-ghost btn-sm" id="analRefrescarCobros" title="Recalcular desde recibos (RX) emitidos">' +
+                            '<i class="fa-solid fa-arrows-rotate"></i> Refrescar' +
+                        '</button>' +
+                    '</div>' +
+                    '<table><thead><tr>' +
+                        '<th>Mes</th><th>Recibos</th><th style="text-align:right">Total</th><th style="width:35%">Volumen</th>' +
+                    '</tr></thead><tbody>' +
+                    (porMes.length === 0
+                        ? '<tr><td colspan="4" class="table-empty">Sin datos. Presioná <b>Refrescar</b> para generar la caché.</td></tr>'
+                        : porMes.map(function (r) {
+                            var t   = Number(r.total) || 0;
+                            var pct = maxMes > 0 ? Math.round((t / maxMes) * 100) : 0;
+                            return '<tr>' +
+                                '<td><div class="td-nombre">' + e(fmtMes(r.mes)) + '</div></td>' +
+                                '<td class="text-muted">' + fmtInt(r.cantidad || 0) + '</td>' +
+                                '<td style="text-align:right;font-weight:600">' + fmtMoney(t) + '</td>' +
+                                '<td>' +
+                                    '<div style="height:6px;background:var(--bg);border-radius:99px;overflow:hidden">' +
+                                        '<div style="height:100%;width:' + pct + '%;background:var(--primary)"></div>' +
+                                    '</div>' +
+                                '</td>' +
+                            '</tr>';
+                        }).join('')) +
+                    '</tbody></table>' +
+                '</div>' +
+
+                '<div class="table-card">' +
+                    '<div class="dash-table-header">' +
+                        '<div><div>Top clientes</div>' +
+                        '<div class="text-muted text-sm" style="font-weight:400;">Facturación acumulada del año</div></div>' +
+                    '</div>' +
+                    '<table><thead><tr>' +
+                        '<th>Cliente</th><th>Comprobantes</th><th style="text-align:right">Total</th>' +
+                    '</tr></thead><tbody>' +
+                    (topCli.length === 0
+                        ? '<tr><td colspan="3" class="table-empty">Sin ventas registradas.</td></tr>'
+                        : topCli.map(function (c) {
+                            return '<tr>' +
+                                '<td><div class="td-nombre">' + e(c.nombre || '—') + '</div>' +
+                                '<div class="td-id">#' + e(c.id) + '</div></td>' +
+                                '<td class="text-muted">' + fmtInt(c.cantidad || 0) + '</td>' +
+                                '<td style="text-align:right;font-weight:600">' + fmtMoney(c.total || 0) + '</td>' +
+                            '</tr>';
+                        }).join('')) +
+                    '</tbody></table>' +
+                '</div>' +
+            '</div>' +
+
+            '<div class="table-card" style="margin-top:20px">' +
+                '<div class="dash-table-header">' +
+                    '<div><div>Comprobantes recientes</div>' +
+                    '<div class="text-muted text-sm" style="font-weight:400;">Últimas emisiones</div></div>' +
+                '</div>' +
+                '<table><thead><tr>' +
+                    '<th>Emisión</th><th>Tipo</th><th>Cliente</th><th style="text-align:right">Total</th>' +
+                '</tr></thead><tbody>' +
+                (recient.length === 0
+                    ? '<tr><td colspan="4" class="table-empty">Sin comprobantes recientes.</td></tr>'
+                    : recient.map(function (r) {
+                        return '<tr>' +
+                            '<td class="text-muted">' + e(r.emision || '—') + '</td>' +
+                            '<td>' + e(r.tipo || '—') + '</td>' +
+                            '<td><div class="td-nombre">' + e(r.razon || '—') + '</div></td>' +
+                            '<td style="text-align:right;font-weight:600">' + fmtMoney(r.total || 0) + '</td>' +
+                        '</tr>';
+                    }).join('')) +
+                '</tbody></table>' +
+            '</div>';
+
+        var btnRefr = document.getElementById('analRefrescarCobros');
+        if (btnRefr) {
+            btnRefr.addEventListener('click', async function () {
+                btnRefr.disabled = true;
+                var label = btnRefr.innerHTML;
+                btnRefr.innerHTML = '<i class="fa-solid fa-arrows-rotate fa-spin"></i> Refrescando…';
+                try {
+                    await api('/api/analizador_refrescar.php', { method: 'POST' });
+                    toast('Cobros actualizados');
+                    await renderAnalizador(view);
+                } catch (err) {
+                    btnRefr.disabled = false;
+                    btnRefr.innerHTML = label;
+                    toast(err.message || 'No se pudo refrescar.', true);
+                }
+            });
+        }
+    }
+
+    // -------- Vista: Comprobantes (Presupuestos / Facturas / Recibos) -----
+    //
+    // Los 3 grupos son listados read-only sobre la tabla `comprobantes`
+    // filtrados por tipo (mapa en /api/comprobantes.php). Comparten un
+    // mismo renderer parametrizado por grupo.
+
+    var comprobantesFiltrosPorGrupo = {
+        presupuestos: { sort:'emision', dir:'desc', limit:100, filtro_id:'', contraparte:'', desde:'', hasta:'' },
+        facturas:     { sort:'emision', dir:'desc', limit:100, filtro_id:'', contraparte:'', desde:'', hasta:'' },
+        recibos:      { sort:'emision', dir:'desc', limit:100, filtro_id:'', contraparte:'', desde:'', hasta:'' }
+    };
+
+    function comprobantesQueryString(grupo) {
+        var f = comprobantesFiltrosPorGrupo[grupo] || {};
+        var qs = ['grupo=' + encodeURIComponent(grupo)];
+        Object.keys(f).forEach(function (k) {
+            var v = f[k];
+            if (v !== '' && v != null) {
+                qs.push(encodeURIComponent(k) + '=' + encodeURIComponent(v));
+            }
+        });
+        return '?' + qs.join('&');
+    }
+
+    async function renderComprobantesGrupo(view, grupo, titulo, subtitulo) {
+        var data  = await api('/api/comprobantes.php' + comprobantesQueryString(grupo));
+        var lista = data.comprobantes || [];
+        var kpis  = data.kpis || {};
+        var f     = comprobantesFiltrosPorGrupo[grupo];
+
+        var filtrosActivos = (f.filtro_id   !== '' ? 1 : 0) +
+                             (f.contraparte !== '' ? 1 : 0) +
+                             (f.desde       !== '' ? 1 : 0) +
+                             (f.hasta       !== '' ? 1 : 0);
+        var badgeFiltros = filtrosActivos
+            ? ' <span class="badge badge-info" style="margin-left:6px;">' + filtrosActivos + '</span>'
+            : '';
+
+        var searchIdInp   = 'cbSearch_'   + grupo;
+        var searchIdClear = 'cbSearchC_'  + grupo;
+        var btnFiltros    = 'cbFiltros_'  + grupo;
+        var tbodyId       = 'cbTbody_'    + grupo;
+        var emptyId       = 'cbEmpty_'    + grupo;
+        var filtrosModal  = 'cbFiltrosM_' + grupo;
+
+        view.innerHTML =
+            '<div class="page-header"><div>' +
+                '<h1>' + e(titulo) + '</h1>' +
+                '<p>' + e(subtitulo) + '</p>' +
+            '</div></div>' +
+
+            '<div class="stats-bar">' +
+                statCard('Total',           fmtInt(kpis.total        || 0), 'orange', 'Registros en la tabla') +
+                statCard('Últimos 30 días', fmtInt(kpis.cantidad_30d || 0), 'green',  'Emitidos en el mes') +
+                statCard('Monto 30 días',   fmtMoney(kpis.monto_30d  || 0), 'orange', 'Facturación reciente') +
+            '</div>' +
+
+            '<div class="toolbar">' +
+                '<div class="toolbar-left">' +
+                    '<div class="search-wrap">' +
+                        '<input type="search" id="' + searchIdInp + '" class="search-input" placeholder="Buscar cliente, razón, CUIT...">' +
+                        '<button class="search-clear" id="' + searchIdClear + '" type="button" style="display:none;">&times;</button>' +
+                    '</div>' +
+                    '<button class="btn btn-secondary" id="' + btnFiltros + '" type="button">' +
+                        '<i class="fa-solid fa-filter"></i> Filtros' + badgeFiltros +
+                    '</button>' +
+                '</div>' +
+            '</div>' +
+
+            '<div class="table-card">' +
+                '<table><thead><tr>' +
+                    '<th>Código</th><th>Emisión</th><th>Tipo</th><th>Nro</th>' +
+                    '<th>Cliente</th><th>Talonario</th>' +
+                    '<th style="text-align:right;">Subtotal</th>' +
+                    '<th style="text-align:right;">Total</th>' +
+                '</tr></thead><tbody id="' + tbodyId + '">' +
+                renderFilasComprobantes(lista) +
+                '</tbody></table>' +
+                '<div class="table-empty" id="' + emptyId + '" style="display:none;">No hay comprobantes que coincidan con la búsqueda.</div>' +
+            '</div>' +
+            '<div class="text-muted text-sm" style="margin-top:10px;">' +
+                'Mostrando ' + lista.length + ' resultado(s) (límite ' + f.limit + ').' +
+            '</div>' +
+
+            modalFiltrosComprobantesHtml(grupo, filtrosModal);
+
+        wireComprobantesView(grupo, {
+            searchIdInp:   searchIdInp,
+            searchIdClear: searchIdClear,
+            btnFiltros:    btnFiltros,
+            tbodyId:       tbodyId,
+            emptyId:       emptyId,
+            filtrosModal:  filtrosModal
+        });
+    }
+
+    function renderFilasComprobantes(lista) {
+        if (!lista.length) {
+            return '<tr><td colspan="8" class="table-empty">Sin comprobantes.</td></tr>';
+        }
+        return lista.map(function (r) {
+            var nro    = (r.punto != null ? String(r.punto).padStart(4, '0') : '----') +
+                         '-' +
+                         (r.serie != null ? String(r.serie).padStart(8, '0') : '--------');
+            var razon  = r.razon || '—';
+            var busq   = String((r.razon || '') + ' ' + (r.cuit || '') + ' ' + nro).toLowerCase().trim();
+            return '<tr data-id="' + r.id + '" data-search="' + e(busq) + '">' +
+                '<td class="td-id">#' + r.id + '</td>' +
+                '<td class="text-muted">' + e(r.emision || '—') + '</td>' +
+                '<td>' + e(r.tipo || '—') + '</td>' +
+                '<td class="td-id">' + e(nro) + '</td>' +
+                '<td><div class="td-nombre">' + e(razon) + '</div>' +
+                    (r.cuit ? '<div class="td-id">CUIT ' + e(r.cuit) + '</div>' : '') +
+                '</td>' +
+                '<td class="text-muted">' + e(r.talonario_nombre || '—') + '</td>' +
+                '<td style="text-align:right;">' + fmtMoney(r.subtotal || 0) + '</td>' +
+                '<td style="text-align:right;font-weight:600;">' + fmtMoney(r.total || 0) + '</td>' +
+            '</tr>';
+        }).join('');
+    }
+
+    function modalFiltrosComprobantesHtml(grupo, modalId) {
+        function selOpt(value, label, current) {
+            var sel = String(current) === String(value) ? ' selected' : '';
+            return '<option value="' + e(value) + '"' + sel + '>' + e(label) + '</option>';
+        }
+        var f = comprobantesFiltrosPorGrupo[grupo];
+        var p = 'cbflt_' + grupo + '_';
+        return '<div class="modal-backdrop" id="' + modalId + '"><div class="modal">' +
+            '<div class="modal-header">' +
+                '<div class="modal-title"><span>Filtros</span></div>' +
+                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+            '</div>' +
+            '<form id="' + p + 'form" novalidate>' +
+                '<div class="modal-body">' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="' + p + 'id">Código</label>' +
+                            '<input id="' + p + 'id" type="number" min="1" step="1" ' +
+                                'inputmode="numeric" placeholder="Código del comprobante" value="' + e(f.filtro_id) + '"></div>' +
+                        '<div class="form-group"><label for="' + p + 'razon">Cliente / razón</label>' +
+                            '<input id="' + p + 'razon" type="text" maxlength="255" ' +
+                                'placeholder="Nombre o razón social" value="' + e(f.contraparte) + '"></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="' + p + 'desde">Desde</label>' +
+                            '<input id="' + p + 'desde" type="date" value="' + e(f.desde) + '"></div>' +
+                        '<div class="form-group"><label for="' + p + 'hasta">Hasta</label>' +
+                            '<input id="' + p + 'hasta" type="date" value="' + e(f.hasta) + '"></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="' + p + 'limit">Límite</label>' +
+                            '<input id="' + p + 'limit" type="number" min="1" max="1000" step="1" ' +
+                                'inputmode="numeric" value="' + e(f.limit) + '"></div>' +
+                        '<div class="form-group"><label for="' + p + 'sort">Ordenar por</label>' +
+                            '<select id="' + p + 'sort">' +
+                                selOpt('emision', 'Emisión', f.sort) +
+                                selOpt('id',      'Código',  f.sort) +
+                                selOpt('total',   'Total',   f.sort) +
+                                selOpt('razon',   'Cliente', f.sort) +
+                                selOpt('tipo',    'Tipo',    f.sort) +
+                            '</select></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="' + p + 'dir">Dirección</label>' +
+                            '<select id="' + p + 'dir">' +
+                                selOpt('desc', 'Descendente', f.dir) +
+                                selOpt('asc',  'Ascendente',  f.dir) +
+                            '</select></div>' +
+                        '<div class="form-group"></div>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="modal-footer">' +
+                    '<button type="button" class="btn btn-ghost"     id="' + p + 'reset" >Limpiar</button>' +
+                    '<button type="button" class="btn btn-secondary" data-act="close"    >Cancelar</button>' +
+                    '<button type="submit"  class="btn btn-primary"                       >Aplicar</button>' +
+                '</div>' +
+            '</form>' +
+        '</div></div>';
+    }
+
+    function wireComprobantesView(grupo, ids) {
+        var tbody       = document.getElementById(ids.tbodyId);
+        var emptyState  = document.getElementById(ids.emptyId);
+        var searchInput = document.getElementById(ids.searchIdInp);
+        var searchClear = document.getElementById(ids.searchIdClear);
+        var filtrosMod  = document.getElementById(ids.filtrosModal);
+        var p = 'cbflt_' + grupo + '_';
+
+        function applyFilters() {
+            var q = searchInput.value.trim().toLowerCase();
+            var visibles = 0;
+            tbody.querySelectorAll('tr[data-id]').forEach(function (tr) {
+                var haystack = tr.dataset.search || '';
+                var show = !q || haystack.indexOf(q) !== -1;
+                tr.style.display = show ? '' : 'none';
+                if (show) visibles++;
+            });
+            emptyState.style.display = (visibles === 0 && tbody.querySelector('tr[data-id]')) ? '' : 'none';
+            searchClear.style.display = q ? '' : 'none';
+        }
+        searchInput.addEventListener('input', applyFilters);
+        searchClear.addEventListener('click', function () {
+            searchInput.value = '';
+            applyFilters();
+            searchInput.focus();
+        });
+
+        document.getElementById(ids.btnFiltros).addEventListener('click', function () {
+            filtrosMod.classList.add('open');
+        });
+        filtrosMod.addEventListener('click', function (ev) {
+            if (ev.target === filtrosMod || ev.target.closest('[data-act="close"]')) {
+                filtrosMod.classList.remove('open');
+            }
+        });
+        document.getElementById(p + 'reset').addEventListener('click', function () {
+            var f = comprobantesFiltrosPorGrupo[grupo];
+            f.sort = 'emision'; f.dir = 'desc'; f.limit = 100;
+            f.filtro_id = ''; f.contraparte = ''; f.desde = ''; f.hasta = '';
+            filtrosMod.classList.remove('open');
+            navigate();
+        });
+        document.getElementById(p + 'form').addEventListener('submit', function (ev) {
+            ev.preventDefault();
+            var f = comprobantesFiltrosPorGrupo[grupo];
+            f.filtro_id   = document.getElementById(p + 'id').value.trim();
+            f.contraparte = document.getElementById(p + 'razon').value.trim();
+            f.desde       = document.getElementById(p + 'desde').value;
+            f.hasta       = document.getElementById(p + 'hasta').value;
+            f.limit       = parseInt(document.getElementById(p + 'limit').value, 10) || 100;
+            f.sort        = document.getElementById(p + 'sort').value || 'emision';
+            f.dir         = document.getElementById(p + 'dir').value  || 'desc';
+            filtrosMod.classList.remove('open');
+            navigate();
+        });
+
+        applyFilters();
+    }
+
+    async function renderPresupuestos(view) {
+        return renderComprobantesGrupo(view, 'presupuestos', 'Presupuestos',
+            'Comprobantes emitidos como presupuestos (tipos PP, PA, PB, PC).');
+    }
+    async function renderFacturas(view) {
+        return renderComprobantesGrupo(view, 'facturas', 'Facturas',
+            'Facturas fiscales emitidas (tipos FA, FB, FC, FE, FM).');
+    }
+    async function renderRecibos(view) {
+        return renderComprobantesGrupo(view, 'recibos', 'Recibos',
+            'Recibos de cobro emitidos (tipos RA, RB, RC).');
+    }
+
+    // -------- Vista: Talonarios -------------------------------------------
+
+    var talonariosFiltros = {
+        sort:      'id',
+        dir:       'desc',
+        limit:     100,
+        filtro_id: '',
+        nombre:    '',
+        tipo:      '',
+        estado:    ''
+    };
+
+    function talonariosQueryString() {
+        var qs = [];
+        Object.keys(talonariosFiltros).forEach(function (k) {
+            var v = talonariosFiltros[k];
+            if (v !== '' && v != null) {
+                qs.push(encodeURIComponent(k) + '=' + encodeURIComponent(v));
+            }
+        });
+        return qs.length ? ('?' + qs.join('&')) : '';
+    }
+
+    async function renderTalonarios(view) {
+        var data       = await api('/api/talonarios.php' + talonariosQueryString());
+        var talonarios = data.talonarios || [];
+        var kpis       = data.kpis       || {};
+
+        var filtrosActivos = (talonariosFiltros.filtro_id !== '' ? 1 : 0) +
+                             (talonariosFiltros.nombre    !== '' ? 1 : 0) +
+                             (talonariosFiltros.tipo      !== '' ? 1 : 0) +
+                             (talonariosFiltros.estado    !== '' ? 1 : 0);
+        var badgeFiltros = filtrosActivos
+            ? ' <span class="badge badge-info" style="margin-left:6px;">' + filtrosActivos + '</span>'
+            : '';
+
+        view.innerHTML =
+            '<div class="page-header"><div>' +
+                '<h1>Talonarios</h1>' +
+                '<p>Talonarios de emisión de comprobantes (facturas, recibos, presupuestos).</p>' +
+            '</div></div>' +
+
+            '<div class="stats-bar">' +
+                statCard('Total',     kpis.total     || 0, 'orange', 'Talonarios registrados') +
+                statCard('Activos',   kpis.activos   || 0, 'green',  'Habilitados para emitir') +
+                statCard('Inactivos', kpis.inactivos || 0, 'red',    'Deshabilitados') +
+            '</div>' +
+
+            '<div class="toolbar">' +
+                '<div class="toolbar-left">' +
+                    '<div class="search-wrap">' +
+                        '<input type="search" id="talSearch" class="search-input" placeholder="Buscar nombre o tipo...">' +
+                        '<button class="search-clear" id="talSearchClear" type="button" style="display:none;">&times;</button>' +
+                    '</div>' +
+                    '<button class="btn btn-secondary" id="talFiltros" type="button">' +
+                        '<i class="fa-solid fa-filter"></i> Filtros' + badgeFiltros +
+                    '</button>' +
+                '</div>' +
+                '<div class="toolbar-right">' +
+                    '<button class="btn btn-primary" id="talNuevo" type="button">+ Nuevo talonario</button>' +
+                '</div>' +
+            '</div>' +
+
+            '<div class="table-card">' +
+                '<table><thead><tr>' +
+                    '<th>Código</th><th>Nombre</th><th>Tipo</th><th>Punto</th>' +
+                    '<th>Serie</th><th>Fiscal</th><th>Comprobantes</th><th>Estado</th>' +
+                    '<th style="text-align:right;">Acciones</th>' +
+                '</tr></thead><tbody id="talTbody">' +
+                renderFilasTalonarios(talonarios) +
+                '</tbody></table>' +
+                '<div class="table-empty" id="talEmpty" style="display:none;">No hay talonarios que coincidan con la búsqueda.</div>' +
+            '</div>' +
+            '<div class="text-muted text-sm" style="margin-top:10px;">' +
+                'Mostrando ' + talonarios.length + ' resultado(s) (límite ' + talonariosFiltros.limit + ').' +
+            '</div>' +
+
+            modalTalonarioHtml() +
+            modalFiltrosTalonariosHtml() +
+            modalConsultarTalonarioHtml() +
+            confirmDeleteTalonarioHtml();
+
+        wireTalonariosView();
+    }
+
+    function renderFilasTalonarios(talonarios) {
+        if (!talonarios.length) {
+            return '<tr><td colspan="9" class="table-empty">No hay talonarios cargados.</td></tr>';
+        }
+        return talonarios.map(function (t) {
+            var activo = parseInt(t.estado, 10) === 1;
+            var busq   = String((t.nombre || '') + ' ' + (t.tipo || '')).toLowerCase().trim();
+            var fiscal = (t.fiscal || '').toUpperCase();
+            var fiscalBadge = fiscal === 'S'
+                ? '<span class="badge badge-success">Fiscal</span>'
+                : (fiscal === 'N'
+                    ? '<span class="badge badge-warn">No fiscal</span>'
+                    : '<span class="text-muted">—</span>');
+            return '<tr data-id="' + t.id + '" data-search="' + e(busq) + '">' +
+                '<td class="td-id">#' + t.id + '</td>' +
+                '<td><div class="td-nombre">' + e(t.nombre || '—') + '</div></td>' +
+                '<td>' + e(t.tipo || '—') + '</td>' +
+                '<td>' + (t.punto != null ? e(String(t.punto).padStart(4, '0')) : '—') + '</td>' +
+                '<td class="td-id">' + (t.serie != null ? e(String(t.serie).padStart(8, '0')) : '—') + '</td>' +
+                '<td>' + fiscalBadge + '</td>' +
+                '<td>' + (parseInt(t.comprobantes_count, 10) || 0) + '</td>' +
+                '<td>' +
+                    (activo
+                        ? '<span class="badge badge-success">Activo</span>'
+                        : '<span class="badge badge-danger">Inactivo</span>') +
+                '</td>' +
+                '<td>' +
+                    '<div class="actions" style="justify-content:flex-end;">' +
+                        '<button class="btn-icon-sm" data-act="view"   type="button" title="Consultar"><i class="fa-solid fa-eye"></i></button>' +
+                        '<button class="btn-icon-sm" data-act="edit"   type="button" title="Editar"><i class="fa-solid fa-pencil"></i></button>' +
+                        '<button class="btn-icon-sm" data-act="delete" type="button" title="Eliminar"><i class="fa-solid fa-trash"></i></button>' +
+                    '</div>' +
+                '</td>' +
+            '</tr>';
+        }).join('');
+    }
+
+    function modalTalonarioHtml() {
+        return '<div class="modal-backdrop" id="talModal"><div class="modal">' +
+            '<div class="modal-header">' +
+                '<div class="modal-title">' +
+                    '<span id="talModalTitulo">Nuevo talonario</span>' +
+                    '<span class="modal-subtitle" id="talModalSub"></span>' +
+                '</div>' +
+                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+            '</div>' +
+            '<form id="talForm" novalidate>' +
+                '<input type="hidden" id="talId" value="">' +
+                '<div class="modal-body">' +
+                    '<div class="alert alert-error" id="talError" style="display:none;"></div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group" style="flex:1 1 100%;"><label for="tal-nombre">Nombre</label>' +
+                            '<input id="tal-nombre" name="nombre" type="text" maxlength="255" required></div>' +
+                    '</div>' +
+                    '<div class="form-row form-row-3">' +
+                        '<div class="form-group"><label for="tal-tipo">Tipo</label>' +
+                            '<input id="tal-tipo" name="tipo" type="text" maxlength="2" ' +
+                                'placeholder="FA, RA, PP..." style="text-transform:uppercase;"></div>' +
+                        '<div class="form-group"><label for="tal-punto">Punto de venta</label>' +
+                            '<input id="tal-punto" name="punto" type="number" min="0" step="1" inputmode="numeric"></div>' +
+                        '<div class="form-group"><label for="tal-serie">Serie inicial</label>' +
+                            '<input id="tal-serie" name="serie" type="number" min="0" step="1" inputmode="numeric"></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="tal-empresa">Empresa</label>' +
+                            '<input id="tal-empresa" name="empresa" type="number" min="1" step="1" inputmode="numeric" ' +
+                                'placeholder="ID de empresa"></div>' +
+                        '<div class="form-group"><label for="tal-fiscal">Fiscal</label>' +
+                            '<select id="tal-fiscal" name="fiscal">' +
+                                '<option value="">— Sin definir —</option>' +
+                                '<option value="S">Sí (fiscal)</option>' +
+                                '<option value="N">No fiscal</option>' +
+                            '</select></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label>Estado</label>' +
+                            '<label class="toggle-switch" style="margin-top:6px;">' +
+                                '<input id="tal-estado" name="estado" type="checkbox" value="1" checked>' +
+                                '<span class="toggle-track"><span class="toggle-thumb"></span></span>' +
+                                '<span class="toggle-label" id="talEstadoLabel">Activo</span>' +
+                            '</label></div>' +
+                        '<div class="form-group"></div>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="modal-footer">' +
+                    '<button type="button" class="btn btn-ghost" data-act="close">Cancelar</button>' +
+                    '<button type="submit" class="btn btn-primary" id="talGuardar">Guardar</button>' +
+                '</div>' +
+            '</form>' +
+        '</div></div>';
+    }
+
+    function confirmDeleteTalonarioHtml() {
+        return '<div class="confirm-backdrop" id="talConfirm"><div class="confirm-box">' +
+            '<div class="confirm-title">Eliminar talonario</div>' +
+            '<div class="confirm-msg" id="talConfirmMsg">Esta acción no se puede deshacer.</div>' +
+            '<div class="confirm-actions">' +
+                '<button class="btn btn-ghost"  data-act="cancel" type="button">Cancelar</button>' +
+                '<button class="btn btn-danger" id="talConfirmBtn" type="button">Eliminar</button>' +
+            '</div>' +
+        '</div></div>';
+    }
+
+    function modalFiltrosTalonariosHtml() {
+        function selOpt(value, label, current) {
+            var sel = String(current) === String(value) ? ' selected' : '';
+            return '<option value="' + e(value) + '"' + sel + '>' + e(label) + '</option>';
+        }
+        return '<div class="modal-backdrop" id="talFiltrosModal"><div class="modal">' +
+            '<div class="modal-header">' +
+                '<div class="modal-title"><span>Filtros</span></div>' +
+                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+            '</div>' +
+            '<form id="talFiltrosForm" novalidate>' +
+                '<div class="modal-body">' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="tflt-id">Código</label>' +
+                            '<input id="tflt-id" type="number" min="1" step="1" inputmode="numeric" ' +
+                                'placeholder="Código del registro" value="' + e(talonariosFiltros.filtro_id) + '"></div>' +
+                        '<div class="form-group"><label for="tflt-nombre">Nombre</label>' +
+                            '<input id="tflt-nombre" type="text" maxlength="255" ' +
+                                'placeholder="Nombre del talonario" value="' + e(talonariosFiltros.nombre) + '"></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="tflt-tipo">Tipo</label>' +
+                            '<input id="tflt-tipo" type="text" maxlength="2" ' +
+                                'placeholder="FA, RA, PP..." style="text-transform:uppercase;" ' +
+                                'value="' + e(talonariosFiltros.tipo) + '"></div>' +
+                        '<div class="form-group"><label for="tflt-estado">Estado</label>' +
+                            '<select id="tflt-estado">' +
+                                selOpt('',  'Todos',      talonariosFiltros.estado) +
+                                selOpt('1', 'Activos',    talonariosFiltros.estado) +
+                                selOpt('0', 'Inactivos',  talonariosFiltros.estado) +
+                            '</select></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="tflt-limit">Límite</label>' +
+                            '<input id="tflt-limit" type="number" min="1" max="1000" step="1" ' +
+                                'inputmode="numeric" value="' + e(talonariosFiltros.limit) + '"></div>' +
+                        '<div class="form-group"><label for="tflt-sort">Ordenar por</label>' +
+                            '<select id="tflt-sort">' +
+                                selOpt('id',     'Código',  talonariosFiltros.sort) +
+                                selOpt('nombre', 'Nombre',  talonariosFiltros.sort) +
+                                selOpt('tipo',   'Tipo',    talonariosFiltros.sort) +
+                                selOpt('punto',  'Punto',   talonariosFiltros.sort) +
+                                selOpt('serie',  'Serie',   talonariosFiltros.sort) +
+                                selOpt('estado', 'Estado',  talonariosFiltros.sort) +
+                            '</select></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="tflt-dir">Dirección</label>' +
+                            '<select id="tflt-dir">' +
+                                selOpt('desc', 'Descendente', talonariosFiltros.dir) +
+                                selOpt('asc',  'Ascendente',  talonariosFiltros.dir) +
+                            '</select></div>' +
+                        '<div class="form-group"></div>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="modal-footer">' +
+                    '<button type="button" class="btn btn-ghost"     id="talFiltrosReset" >Limpiar</button>' +
+                    '<button type="button" class="btn btn-secondary" data-act="close"    >Cancelar</button>' +
+                    '<button type="submit"  class="btn btn-primary"                       >Aplicar</button>' +
+                '</div>' +
+            '</form>' +
+        '</div></div>';
+    }
+
+    function modalConsultarTalonarioHtml() {
+        return '<div class="modal-backdrop" id="talConsultar"><div class="modal">' +
+            '<div class="modal-header">' +
+                '<div class="modal-title">' +
+                    '<span>Consultar talonario</span>' +
+                    '<span class="modal-subtitle" id="talConsultarSub"></span>' +
+                '</div>' +
+                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+            '</div>' +
+            '<div class="modal-body">' +
+                '<dl class="data-list" id="talConsultarBody"></dl>' +
+            '</div>' +
+            '<div class="modal-footer">' +
+                '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+            '</div>' +
+        '</div></div>';
+    }
+
+    function wireTalonariosView() {
+        var tbody       = document.getElementById('talTbody');
+        var emptyState  = document.getElementById('talEmpty');
+        var searchInput = document.getElementById('talSearch');
+        var searchClear = document.getElementById('talSearchClear');
+
+        var modal       = document.getElementById('talModal');
+        var modalTitulo = document.getElementById('talModalTitulo');
+        var modalSub    = document.getElementById('talModalSub');
+        var modalError  = document.getElementById('talError');
+        var form        = document.getElementById('talForm');
+        var fId         = document.getElementById('talId');
+        var fEstado     = document.getElementById('tal-estado');
+        var estadoLabel = document.getElementById('talEstadoLabel');
+        var btnGuardar  = document.getElementById('talGuardar');
+
+        var confirmBox = document.getElementById('talConfirm');
+        var confirmMsg = document.getElementById('talConfirmMsg');
+        var btnDelete  = document.getElementById('talConfirmBtn');
+
+        var filtrosModal = document.getElementById('talFiltrosModal');
+        var filtrosForm  = document.getElementById('talFiltrosForm');
+
+        var consultarModal = document.getElementById('talConsultar');
+        var consultarSub   = document.getElementById('talConsultarSub');
+        var consultarBody  = document.getElementById('talConsultarBody');
+
+        var pendingDeleteId = null;
+        var modoEdicion     = false;
+
+        function applyFilters() {
+            var q = searchInput.value.trim().toLowerCase();
+            var visibles = 0;
+            tbody.querySelectorAll('tr[data-id]').forEach(function (tr) {
+                var haystack = tr.dataset.search || '';
+                var show = !q || haystack.indexOf(q) !== -1;
+                tr.style.display = show ? '' : 'none';
+                if (show) visibles++;
+            });
+            emptyState.style.display = (visibles === 0 && tbody.querySelector('tr[data-id]')) ? '' : 'none';
+            searchClear.style.display = q ? '' : 'none';
+        }
+
+        searchInput.addEventListener('input', applyFilters);
+        searchClear.addEventListener('click', function () {
+            searchInput.value = '';
+            applyFilters();
+            searchInput.focus();
+        });
+
+        document.getElementById('talFiltros').addEventListener('click', function () {
+            filtrosModal.classList.add('open');
+        });
+        filtrosModal.addEventListener('click', function (ev) {
+            if (ev.target === filtrosModal || ev.target.closest('[data-act="close"]')) {
+                filtrosModal.classList.remove('open');
+            }
+        });
+        document.getElementById('talFiltrosReset').addEventListener('click', function () {
+            talonariosFiltros.sort      = 'id';
+            talonariosFiltros.dir       = 'desc';
+            talonariosFiltros.limit     = 100;
+            talonariosFiltros.filtro_id = '';
+            talonariosFiltros.nombre    = '';
+            talonariosFiltros.tipo      = '';
+            talonariosFiltros.estado    = '';
+            filtrosModal.classList.remove('open');
+            navigate();
+        });
+        filtrosForm.addEventListener('submit', function (ev) {
+            ev.preventDefault();
+            talonariosFiltros.filtro_id = document.getElementById('tflt-id').value.trim();
+            talonariosFiltros.nombre    = document.getElementById('tflt-nombre').value.trim();
+            talonariosFiltros.tipo      = document.getElementById('tflt-tipo').value.trim().toUpperCase();
+            talonariosFiltros.estado    = document.getElementById('tflt-estado').value;
+            talonariosFiltros.limit     = parseInt(document.getElementById('tflt-limit').value, 10) || 100;
+            talonariosFiltros.sort      = document.getElementById('tflt-sort').value || 'id';
+            talonariosFiltros.dir       = document.getElementById('tflt-dir').value  || 'desc';
+            filtrosModal.classList.remove('open');
+            navigate();
+        });
+
+        consultarModal.addEventListener('click', function (ev) {
+            if (ev.target === consultarModal || ev.target.closest('[data-act="close"]')) {
+                consultarModal.classList.remove('open');
+            }
+        });
+
+        async function abrirConsulta(id) {
+            consultarSub.innerHTML  = '<code>#' + id + '</code>';
+            consultarBody.innerHTML = '<div style="display:flex;justify-content:center;padding:24px"><div class="spin"></div></div>';
+            consultarModal.classList.add('open');
+
+            var t;
+            try {
+                t = await api('/api/talonarios.php?id=' + id);
+            } catch (err) {
+                consultarBody.innerHTML = '<div class="alert alert-error">' + e(err.message) + '</div>';
+                return;
+            }
+            var estadoBadge = parseInt(t.estado, 10) === 1
+                ? '<span class="badge badge-success">Activo</span>'
+                : '<span class="badge badge-danger">Inactivo</span>';
+            var fiscalTxt = (t.fiscal || '').toUpperCase();
+            fiscalTxt = fiscalTxt === 'S' ? 'Sí (fiscal)' : (fiscalTxt === 'N' ? 'No fiscal' : null);
+
+            consultarSub.innerHTML  = '<code>#' + t.id + '</code>';
+            consultarBody.innerHTML =
+                abmRow    ('Código',  '<code>#' + t.id + '</code>') +
+                abmRowTxt ('Nombre',  t.nombre) +
+                abmRowNum ('Empresa', t.empresa, 'Sin empresa') +
+                abmRowTxt ('Tipo',    t.tipo,    'Sin tipo') +
+                abmRowNum ('Punto',   t.punto,   'Sin punto') +
+                abmRowNum ('Serie',   t.serie,   'Sin serie') +
+                abmRowTxt ('Fiscal',  fiscalTxt, 'Sin definir') +
+                abmRow    ('Estado',  estadoBadge);
+        }
+
+        function setEstadoLabel() {
+            estadoLabel.textContent = fEstado.checked ? 'Activo' : 'Inactivo';
+        }
+        fEstado.addEventListener('change', setEstadoLabel);
+
+        function resetForm() {
+            form.reset();
+            fId.value = '';
+            fEstado.checked = true;
+            setEstadoLabel();
+        }
+        function openModal()  { modal.classList.add('open'); }
+        function closeModal() {
+            modal.classList.remove('open');
+            modalError.style.display = 'none';
+            modalError.textContent = '';
+        }
+        function showFormError(msg) {
+            modalError.textContent = msg;
+            modalError.style.display = '';
+        }
+
+        modal.addEventListener('click', function (ev) {
+            if (ev.target === modal || ev.target.closest('[data-act="close"]')) closeModal();
+        });
+
+        document.getElementById('talNuevo').addEventListener('click', function () {
+            modoEdicion = false;
+            resetForm();
+            modalTitulo.textContent = 'Nuevo talonario';
+            modalSub.textContent    = '';
+            openModal();
+            document.getElementById('tal-nombre').focus();
+        });
+
+        tbody.addEventListener('click', async function (ev) {
+            var btn = ev.target.closest('button[data-act]');
+            if (!btn) return;
+            var tr = btn.closest('tr[data-id]');
+            if (!tr) return;
+            var id = parseInt(tr.dataset.id, 10);
+
+            if (btn.dataset.act === 'view') {
+                abrirConsulta(id);
+                return;
+            }
+
+            if (btn.dataset.act === 'edit') {
+                try {
+                    var t = await api('/api/talonarios.php?id=' + id);
+                    modoEdicion = true;
+                    resetForm();
+                    fId.value = t.id;
+                    modalTitulo.textContent = 'Editar talonario';
+                    modalSub.textContent    = '#' + t.id;
+                    document.getElementById('tal-nombre').value  = t.nombre  || '';
+                    document.getElementById('tal-tipo').value    = t.tipo    || '';
+                    document.getElementById('tal-punto').value   = t.punto   != null ? t.punto : '';
+                    document.getElementById('tal-serie').value   = t.serie   != null ? t.serie : '';
+                    document.getElementById('tal-empresa').value = t.empresa != null ? t.empresa : '';
+                    document.getElementById('tal-fiscal').value  = (t.fiscal || '').toUpperCase();
+                    fEstado.checked = parseInt(t.estado, 10) === 1;
+                    setEstadoLabel();
+                    openModal();
+                    document.getElementById('tal-nombre').focus();
+                } catch (err) {
+                    toast(err.message, true);
+                }
+                return;
+            }
+
+            if (btn.dataset.act === 'delete') {
+                var nombre = (tr.querySelector('.td-nombre') || {}).textContent || ('#' + id);
+                confirmMsg.textContent = '¿Eliminar el talonario "' + nombre.trim() + '"? Esta acción no se puede deshacer.';
+                pendingDeleteId = id;
+                confirmBox.classList.add('open');
+            }
+        });
+
+        confirmBox.addEventListener('click', function (ev) {
+            if (ev.target === confirmBox || ev.target.closest('[data-act="cancel"]')) {
+                confirmBox.classList.remove('open');
+                pendingDeleteId = null;
+            }
+        });
+
+        btnDelete.addEventListener('click', async function () {
+            if (!pendingDeleteId) return;
+            btnDelete.disabled = true;
+            try {
+                await api('/api/talonarios.php?id=' + pendingDeleteId, { method: 'DELETE' });
+                toast('Talonario eliminado.');
+                navigate();
+            } catch (err) {
+                toast(err.message, true);
+            } finally {
+                btnDelete.disabled = false;
+                confirmBox.classList.remove('open');
+                pendingDeleteId = null;
+            }
+        });
+
+        form.addEventListener('submit', async function (ev) {
+            ev.preventDefault();
+            modalError.style.display = 'none';
+
+            var payload = {
+                nombre:  document.getElementById('tal-nombre').value.trim(),
+                empresa: document.getElementById('tal-empresa').value.trim(),
+                tipo:    document.getElementById('tal-tipo').value.trim().toUpperCase(),
+                punto:   document.getElementById('tal-punto').value.trim(),
+                serie:   document.getElementById('tal-serie').value.trim(),
+                fiscal:  document.getElementById('tal-fiscal').value,
+                estado:  fEstado.checked ? 1 : 0
+            };
+
+            btnGuardar.disabled = true;
+            try {
+                if (modoEdicion) {
+                    await api('/api/talonarios.php?id=' + encodeURIComponent(fId.value), {
+                        method: 'PUT',
+                        body:   payload
+                    });
+                    toast('Talonario actualizado.');
+                } else {
+                    await api('/api/talonarios.php', {
+                        method: 'POST',
+                        body:   payload
+                    });
+                    toast('Talonario creado.');
+                }
+                closeModal();
+                navigate();
+            } catch (err) {
+                showFormError(err.message);
+            } finally {
+                btnGuardar.disabled = false;
+            }
+        });
+
+        applyFilters();
     }
 
     // -------- Vista: Usuarios ---------------------------------------------
@@ -5699,16 +6644,39 @@
                 '<p>Ajustes generales y parámetros del sistema.</p>' +
             '</div></div>' +
 
+            // Tarjetas del módulo Herramientas: mantener ordenadas
+            // alfabéticamente por título. Al agregar una nueva, insertala
+            // en la posición correcta — no la pegues al final.
             '<div class="tile-grid">' +
-                '<button type="button" class="tile-card" id="cfgTileParametros">' +
-                    '<span class="tile-icon">⚙️</span>' +
-                    '<span class="tile-title">Parámetros</span>' +
-                    '<span class="tile-desc">Variables internas del sistema.</span>' +
+                '<button type="button" class="tile-card" id="cfgTileExpDB">' +
+                    '<span class="tile-icon">🗄️</span>' +
+                    '<span class="tile-title">Explorador DB</span>' +
+                    '<span class="tile-desc">Recorré las tablas de la base del entorno actual, ojeá su estructura y los últimos registros.</span>' +
                 '</button>' +
                 '<button type="button" class="tile-card" id="cfgTileS3Exp">' +
                     '<span class="tile-icon">📁</span>' +
                     '<span class="tile-title">Explorador S3</span>' +
                     '<span class="tile-desc">Navegá, subí, descargá y eliminá carpetas y archivos del bucket del entorno actual.</span>' +
+                '</button>' +
+                '<button type="button" class="tile-card" id="cfgTileMigrador">' +
+                    '<span class="tile-icon">📜</span>' +
+                    '<span class="tile-title">Migrador DB</span>' +
+                    '<span class="tile-desc">Aplicá las migraciones pendientes de <code>db/migrations/</code> contra la BD del entorno actual.</span>' +
+                '</button>' +
+                '<button type="button" class="tile-card" id="cfgTileParametros">' +
+                    '<span class="tile-icon">⚙️</span>' +
+                    '<span class="tile-title">Parámetros</span>' +
+                    '<span class="tile-desc">Variables internas del sistema.</span>' +
+                '</button>' +
+                '<button type="button" class="tile-card" id="cfgTileTareas">' +
+                    '<span class="tile-icon">⏰</span>' +
+                    '<span class="tile-title">Programador de tareas</span>' +
+                    '<span class="tile-desc">Administrá los procesos automáticos programados que el scheduler dispara cada minuto, y revisá el historial y el log en vivo de cada ejecución.</span>' +
+                '</button>' +
+                '<button type="button" class="tile-card" id="cfgTileSucesos">' +
+                    '<span class="tile-icon">📰</span>' +
+                    '<span class="tile-title">Visor de sucesos</span>' +
+                    '<span class="tile-desc">Recorré el log de actividad que los distintos módulos van registrando al trabajar.</span>' +
                 '</button>' +
             '</div>' +
 
@@ -5718,10 +6686,29 @@
             modalParametrosListaHtml() +
             modalExploradorS3Html() +
             confirmDeleteS3Html() +
-            ctxMenuS3Html();
+            ctxMenuS3Html() +
+            modalVisorSucesosHtml() +
+            modalSucesoDetalleHtml() +
+            modalMigradorListaHtml() +
+            modalMigradorPreviewHtml() +
+            confirmMigradorHtml() +
+            modalExploradorDBHtml() +
+            modalTareasListaHtml() +
+            modalTareaFormHtml() +
+            modalTareasEjecucionesHtml() +
+            modalTareasTerminalHtml() +
+            modalCronBuilderHtml() +
+            modalCronPickerHtml() +
+            ctxMenuTareasHtml() +
+            ctxMenuEjecucionesHtml() +
+            confirmTareasHtml();
 
         wireConfigView();
         wireExploradorS3View();
+        wireVisorSucesosView();
+        wireMigradorView();
+        wireExploradorDBView();
+        wireTareasView();
     }
 
     function modalParametrosListaHtml() {
@@ -6664,6 +7651,2863 @@
         var bd = document.getElementById('s3ExpModalBackdrop');
         if (bd && bd.classList.contains('open')) { cerrarExploradorS3(); }
     });
+
+    // -------- Vista: Visor de sucesos (Herramientas) ----------------------
+
+    var sucesosCache        = [];
+    var sucesosFiltroQ      = '';
+    var sucesosFiltroTipo   = '';
+    var _sucesosSearchTimer = null;
+
+    var SUCESOS_TIPOS = {
+        info:   { label: 'Info',   icon: 'fa-circle-info',          color: 'var(--info)'   },
+        alerta: { label: 'Alerta', icon: 'fa-triangle-exclamation', color: 'var(--warn)'   },
+        error:  { label: 'Error',  icon: 'fa-circle-exclamation',   color: 'var(--danger)' }
+    };
+
+    function sucesoTipoHtml(tipo) {
+        var meta = SUCESOS_TIPOS[tipo] || SUCESOS_TIPOS.info;
+        return '<span style="display:inline-flex;align-items:center;gap:6px">' +
+                    '<i class="fa-solid ' + meta.icon + '" style="color:' + meta.color + '"></i>' +
+                    '<span>' + meta.label + '</span>' +
+               '</span>';
+    }
+
+    function modalVisorSucesosHtml() {
+        return '<div class="modal-backdrop" id="sucesosBackdrop">' +
+            '<div class="modal" style="max-width:1100px">' +
+                '<div class="modal-header">' +
+                    '<div class="modal-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+                        '<span style="font-size:1.2rem">📰</span>' +
+                        '<span>Visor de sucesos</span>' +
+                        '<span id="sucesosResumen" class="modal-subtitle"></span>' +
+                    '</div>' +
+                    '<button class="btn-icon-sm" type="button" data-act="close" aria-label="Cerrar">&times;</button>' +
+                '</div>' +
+                '<div class="modal-body" style="gap:12px">' +
+                    '<div class="toolbar" style="margin-bottom:0">' +
+                        '<div class="toolbar-left" style="gap:8px;flex-wrap:wrap">' +
+                            '<div class="search-wrap">' +
+                                '<input class="search-input" type="search" id="sucesosSearch" placeholder="🔍 Buscar origen, detalle…">' +
+                                '<button class="search-clear" id="sucesosSearchClear" type="button" style="display:none">&times;</button>' +
+                            '</div>' +
+                            '<div id="sucesosTipoChips" style="display:flex;gap:6px;flex-wrap:wrap">' +
+                                '<button type="button" class="filter-chip active" data-val="">Todos</button>' +
+                                '<button type="button" class="filter-chip" data-val="info"><i class="fa-solid fa-circle-info" style="color:var(--info)"></i> Info</button>' +
+                                '<button type="button" class="filter-chip" data-val="alerta"><i class="fa-solid fa-triangle-exclamation" style="color:var(--warn)"></i> Alerta</button>' +
+                                '<button type="button" class="filter-chip" data-val="error"><i class="fa-solid fa-circle-exclamation" style="color:var(--danger)"></i> Error</button>' +
+                            '</div>' +
+                            '<label style="display:flex;align-items:center;gap:6px;font-size:.82rem;color:var(--muted)">Desde <input type="date" id="sucesosDesde"></label>' +
+                            '<label style="display:flex;align-items:center;gap:6px;font-size:.82rem;color:var(--muted)">Hasta <input type="date" id="sucesosHasta"></label>' +
+                            '<label style="display:flex;align-items:center;gap:6px;font-size:.82rem;color:var(--muted)">Límite ' +
+                                '<select id="sucesosLimite">' +
+                                    '<option value="100">100</option>' +
+                                    '<option value="200" selected>200</option>' +
+                                    '<option value="500">500</option>' +
+                                    '<option value="1000">1.000</option>' +
+                                    '<option value="2000">2.000</option>' +
+                                '</select>' +
+                            '</label>' +
+                            '<button class="btn btn-ghost btn-icon" type="button" id="sucesosBtnRefrescar" title="Refrescar"><i class="fa-solid fa-rotate"></i></button>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="table-card">' +
+                        '<table>' +
+                            '<thead><tr>' +
+                                '<th style="width:80px">ID</th>' +
+                                '<th style="width:170px">Fecha</th>' +
+                                '<th style="width:180px">Origen</th>' +
+                                '<th style="width:120px">Tipo</th>' +
+                                '<th>Detalle</th>' +
+                            '</tr></thead>' +
+                            '<tbody id="sucesosTbody">' +
+                                '<tr><td colspan="5" style="text-align:center;padding:20px"><div class="spin"></div></td></tr>' +
+                            '</tbody>' +
+                        '</table>' +
+                    '</div>' +
+                    '<div style="font-size:.78rem;color:var(--muted);line-height:1.5">' +
+                        'Vista de solo lectura sobre la tabla <code style="font-family:monospace">sucesos_log</code>. ' +
+                        'Los registros se ordenan por <strong>id descendente</strong> (más recientes primero). ' +
+                        'Tocá una fila para ver el detalle completo.' +
+                    '</div>' +
+                '</div>' +
+                '<div class="modal-footer">' +
+                    '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+                '</div>' +
+            '</div>' +
+        '</div>';
+    }
+
+    function modalSucesoDetalleHtml() {
+        return '<div class="modal-backdrop" id="sucesoDetalleBackdrop">' +
+            '<div class="modal" style="max-width:780px">' +
+                '<div class="modal-header">' +
+                    '<div class="modal-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+                        '<span style="font-size:1.2rem">📰</span>' +
+                        '<span>Suceso</span>' +
+                        '<span class="modal-subtitle">#<span id="sucesoDetalleId">—</span></span>' +
+                    '</div>' +
+                    '<button class="btn-icon-sm" type="button" data-act="close" aria-label="Cerrar">&times;</button>' +
+                '</div>' +
+                '<div class="modal-body">' +
+                    '<div class="form-row">' +
+                        '<div class="form-group">' +
+                            '<label>Fecha</label>' +
+                            '<div id="sucesoDetalleFecha" style="font-family:monospace">—</div>' +
+                        '</div>' +
+                        '<div class="form-group">' +
+                            '<label>Tipo</label>' +
+                            '<div id="sucesoDetalleTipo" style="display:flex;align-items:center;gap:6px">—</div>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="form-group">' +
+                        '<label>Origen</label>' +
+                        '<div id="sucesoDetalleOrigen" style="font-family:monospace">—</div>' +
+                    '</div>' +
+                    '<div class="form-group">' +
+                        '<label>Detalle</label>' +
+                        '<textarea id="sucesoDetalleTexto" readonly spellcheck="false" autocomplete="off" style="min-height:260px;font-family:monospace"></textarea>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="modal-footer">' +
+                    '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+                '</div>' +
+            '</div>' +
+        '</div>';
+    }
+
+    function abrirVisorSucesos() {
+        var bd = document.getElementById('sucesosBackdrop');
+        if (!bd) return;
+        sucesosFiltroQ    = '';
+        sucesosFiltroTipo = '';
+        var search = document.getElementById('sucesosSearch');
+        if (search) search.value = '';
+        var clear = document.getElementById('sucesosSearchClear');
+        if (clear) clear.style.display = 'none';
+        bd.classList.add('open');
+        cargarSucesos();
+    }
+
+    function cerrarVisorSucesos() {
+        var bd = document.getElementById('sucesosBackdrop');
+        if (bd) bd.classList.remove('open');
+    }
+
+    function cerrarSucesoDetalle() {
+        var bd = document.getElementById('sucesoDetalleBackdrop');
+        if (bd) bd.classList.remove('open');
+    }
+
+    function sucesosOnSearch(v) {
+        sucesosFiltroQ = v || '';
+        var clear = document.getElementById('sucesosSearchClear');
+        if (clear) clear.style.display = sucesosFiltroQ ? '' : 'none';
+        if (_sucesosSearchTimer) clearTimeout(_sucesosSearchTimer);
+        _sucesosSearchTimer = setTimeout(cargarSucesos, 250);
+    }
+
+    function sucesosLimpiarBusqueda() {
+        var input = document.getElementById('sucesosSearch');
+        if (input) input.value = '';
+        sucesosFiltroQ = '';
+        var clear = document.getElementById('sucesosSearchClear');
+        if (clear) clear.style.display = 'none';
+        cargarSucesos();
+    }
+
+    function setFiltroTipoSucesos(chip, valor) {
+        sucesosFiltroTipo = valor || '';
+        var chips = document.querySelectorAll('#sucesosTipoChips .filter-chip');
+        for (var i = 0; i < chips.length; i++) {
+            chips[i].classList.toggle('active', chips[i] === chip);
+        }
+        cargarSucesos();
+    }
+
+    async function cargarSucesos() {
+        var tbody = document.getElementById('sucesosTbody');
+        if (!tbody) return;
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px"><div class="spin"></div></td></tr>';
+
+        var desdeEl  = document.getElementById('sucesosDesde');
+        var hastaEl  = document.getElementById('sucesosHasta');
+        var limiteEl = document.getElementById('sucesosLimite');
+        var desde  = desdeEl  ? desdeEl.value  : '';
+        var hasta  = hastaEl  ? hastaEl.value  : '';
+        var limite = limiteEl ? limiteEl.value : '200';
+
+        var qs = new URLSearchParams();
+        if (sucesosFiltroQ)    qs.set('q', sucesosFiltroQ);
+        if (sucesosFiltroTipo) qs.set('tipo', sucesosFiltroTipo);
+        if (desde)             qs.set('desde', desde);
+        if (hasta)             qs.set('hasta', hasta);
+        qs.set('limite', limite);
+
+        try {
+            var data = await api('/api/sucesos_log.php?' + qs.toString());
+            sucesosCache = data.items || [];
+            var resumen = document.getElementById('sucesosResumen');
+            if (resumen && data.stats) {
+                var m = data.stats.mostrados == null ? sucesosCache.length : data.stats.mostrados;
+                var t = data.stats.total     == null ? m                    : data.stats.total;
+                resumen.textContent = m.toLocaleString('es-AR') + ' de ' + t.toLocaleString('es-AR') + ' registros';
+            }
+            renderSucesos(sucesosCache);
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="5" class="table-empty">✗ ' + e(err.message) + '</td></tr>';
+        }
+    }
+
+    function renderSucesos(rows) {
+        var tbody = document.getElementById('sucesosTbody');
+        if (!tbody) return;
+        if (!rows.length) {
+            tbody.innerHTML = '<tr><td colspan="5" class="table-empty">Sin sucesos para mostrar.</td></tr>';
+            return;
+        }
+        var dashVacio = '<span style="color:var(--muted);font-style:italic">—</span>';
+        tbody.innerHTML = rows.map(function (s) {
+            var fecha   = e(s.fecha   || '');
+            var origen  = e(s.origen  || '');
+            var detalle = e(s.detalle || '');
+            return '<tr class="row-clickable" data-id="' + s.id + '" style="cursor:pointer">' +
+                '<td class="td-id">#' + s.id + '</td>' +
+                '<td style="font-family:monospace;white-space:nowrap">' + (fecha  || dashVacio) + '</td>' +
+                '<td style="font-family:monospace;font-weight:600">' + (origen || dashVacio) + '</td>' +
+                '<td>' + sucesoTipoHtml(s.tipo) + '</td>' +
+                '<td style="color:var(--muted);max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + detalle + '">' + detalle + '</td>' +
+            '</tr>';
+        }).join('');
+    }
+
+    function sucesosVerDetalle(id) {
+        var s = null;
+        for (var i = 0; i < sucesosCache.length; i++) {
+            if (sucesosCache[i].id === id) { s = sucesosCache[i]; break; }
+        }
+        if (!s) return;
+        document.getElementById('sucesoDetalleId').textContent     = s.id;
+        document.getElementById('sucesoDetalleFecha').textContent  = s.fecha  || '—';
+        document.getElementById('sucesoDetalleOrigen').textContent = s.origen || '—';
+        document.getElementById('sucesoDetalleTipo').innerHTML     = sucesoTipoHtml(s.tipo);
+        document.getElementById('sucesoDetalleTexto').value        = s.detalle || '';
+        var bd = document.getElementById('sucesoDetalleBackdrop');
+        if (bd) bd.classList.add('open');
+    }
+
+    function wireVisorSucesosView() {
+        var tile = document.getElementById('cfgTileSucesos');
+        if (tile) tile.addEventListener('click', abrirVisorSucesos);
+
+        var listBd = document.getElementById('sucesosBackdrop');
+        if (listBd) {
+            listBd.addEventListener('click', function (ev) {
+                if (ev.target === listBd || ev.target.closest('[data-act="close"]')) {
+                    cerrarVisorSucesos();
+                }
+            });
+        }
+
+        var detBd = document.getElementById('sucesoDetalleBackdrop');
+        if (detBd) {
+            detBd.addEventListener('click', function (ev) {
+                if (ev.target === detBd || ev.target.closest('[data-act="close"]')) {
+                    cerrarSucesoDetalle();
+                }
+            });
+        }
+
+        var searchInput = document.getElementById('sucesosSearch');
+        if (searchInput) {
+            searchInput.addEventListener('input', function () { sucesosOnSearch(searchInput.value); });
+        }
+        var searchClear = document.getElementById('sucesosSearchClear');
+        if (searchClear) searchClear.addEventListener('click', sucesosLimpiarBusqueda);
+
+        var chips = document.querySelectorAll('#sucesosTipoChips .filter-chip');
+        for (var i = 0; i < chips.length; i++) {
+            (function (chip) {
+                chip.addEventListener('click', function () {
+                    setFiltroTipoSucesos(chip, chip.getAttribute('data-val') || '');
+                });
+            })(chips[i]);
+        }
+
+        var desdeEl  = document.getElementById('sucesosDesde');
+        var hastaEl  = document.getElementById('sucesosHasta');
+        var limiteEl = document.getElementById('sucesosLimite');
+        if (desdeEl)  desdeEl.addEventListener('change',  cargarSucesos);
+        if (hastaEl)  hastaEl.addEventListener('change',  cargarSucesos);
+        if (limiteEl) limiteEl.addEventListener('change', cargarSucesos);
+
+        var btnRef = document.getElementById('sucesosBtnRefrescar');
+        if (btnRef) btnRef.addEventListener('click', cargarSucesos);
+
+        var tbody = document.getElementById('sucesosTbody');
+        if (tbody) {
+            tbody.addEventListener('click', function (ev) {
+                var tr = ev.target.closest('tr[data-id]');
+                if (!tr) return;
+                var id = parseInt(tr.getAttribute('data-id'), 10);
+                if (id) sucesosVerDetalle(id);
+            });
+        }
+
+        if (!wireVisorSucesosView._escBound) {
+            wireVisorSucesosView._escBound = true;
+            document.addEventListener('keydown', function (ev) {
+                if (ev.key !== 'Escape') return;
+                var det = document.getElementById('sucesoDetalleBackdrop');
+                if (det && det.classList.contains('open')) {
+                    det.classList.remove('open');
+                    ev.stopImmediatePropagation();
+                }
+            }, true);
+        }
+    }
+
+    // -------- Vista: Migrador DB (Herramientas) ---------------------------
+
+    var migracionesCache        = [];
+    var migrPreviewNombreActual = '';
+    var migrEnvActual           = '';
+    var migrDbActual            = '';
+    var _migrCargando           = false;
+    var _migrAplicando          = false;
+    var _migrConfirmResolve     = null;
+
+    function modalMigradorListaHtml() {
+        return '<div class="modal-backdrop" id="migracionesBackdrop">' +
+            '<div class="modal" style="max-width:960px">' +
+                '<div class="modal-header">' +
+                    '<div class="modal-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+                        '<span style="font-size:1.2rem">📜</span>' +
+                        '<span>Migrador DB</span>' +
+                        '<span class="badge badge-info" id="migrDbName" style="font-family:monospace">—</span>' +
+                        '<span class="badge" id="migrEnvBadge" style="font-family:monospace">—</span>' +
+                    '</div>' +
+                    '<button class="btn-icon-sm" type="button" data-act="close" aria-label="Cerrar">&times;</button>' +
+                '</div>' +
+                '<div class="modal-body" style="gap:12px">' +
+                    '<div class="toolbar" style="margin-bottom:0">' +
+                        '<div class="toolbar-left" style="gap:8px;flex-wrap:wrap">' +
+                            '<button class="btn btn-ghost btn-sm" type="button" title="Refrescar" id="migrBtnRefrescar">Refrescar</button>' +
+                            '<span id="migrResumen" style="font-size:.82rem;color:var(--muted)"></span>' +
+                        '</div>' +
+                        '<div class="toolbar-right">' +
+                            '<button class="btn btn-primary" id="migrBtnAplicarPendientes" type="button" disabled>Aplicar todas las pendientes</button>' +
+                        '</div>' +
+                    '</div>' +
+
+                    '<div class="table-card" style="max-height:52vh;overflow-y:auto">' +
+                        '<table>' +
+                            '<thead>' +
+                                '<tr>' +
+                                    '<th style="width:110px;position:sticky;top:0;background:var(--bg);z-index:1">Estado</th>' +
+                                    '<th style="position:sticky;top:0;background:var(--bg);z-index:1">Archivo</th>' +
+                                    '<th style="width:90px;position:sticky;top:0;background:var(--bg);z-index:1">Tamaño</th>' +
+                                    '<th style="width:110px;position:sticky;top:0;background:var(--bg);z-index:1">Hash</th>' +
+                                    '<th style="width:160px;position:sticky;top:0;background:var(--bg);z-index:1">Aplicada</th>' +
+                                    '<th style="width:180px;text-align:center;position:sticky;top:0;background:var(--bg);z-index:1">Acciones</th>' +
+                                '</tr>' +
+                            '</thead>' +
+                            '<tbody id="migrTbody">' +
+                                '<tr><td colspan="6" style="text-align:center;padding:20px"><div class="spin"></div></td></tr>' +
+                            '</tbody>' +
+                        '</table>' +
+                    '</div>' +
+
+                    '<div style="font-size:.78rem;color:var(--muted);line-height:1.5">' +
+                        'Los archivos viven en <code style="font-family:monospace">db/migrations/</code> ' +
+                        'y se aplican en orden alfabético. Cada migración se registra en la tabla ' +
+                        '<code style="font-family:monospace">migraciones</code> de la BD del entorno actual ' +
+                        'para no re-ejecutarse. <strong>El target es siempre la BD del propio panel.</strong>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="modal-footer">' +
+                    '<button class="btn btn-ghost" type="button" data-act="close">Cerrar</button>' +
+                '</div>' +
+            '</div>' +
+        '</div>';
+    }
+
+    function modalMigradorPreviewHtml() {
+        return '<div class="modal-backdrop" id="migrPreviewBackdrop">' +
+            '<div class="modal modal-wide">' +
+                '<div class="modal-header">' +
+                    '<div class="modal-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+                        '<span style="font-size:1.2rem">📜</span>' +
+                        '<span>Migración</span>' +
+                        '<span class="modal-subtitle"><code id="migrPreviewNombre" style="font-family:monospace">—</code></span>' +
+                    '</div>' +
+                    '<button class="btn-icon-sm" type="button" data-act="close" aria-label="Cerrar">&times;</button>' +
+                '</div>' +
+                '<div class="modal-body">' +
+                    '<div class="form-group">' +
+                        '<label>Contenido SQL (solo lectura)</label>' +
+                        '<textarea class="json-editor" id="migrPreviewSql" readonly spellcheck="false" autocomplete="off"></textarea>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="modal-footer">' +
+                    '<button class="btn btn-ghost" type="button" data-act="close">Cerrar</button>' +
+                    '<button class="btn btn-primary" id="migrPreviewBtnAplicar" type="button">Aplicar</button>' +
+                '</div>' +
+            '</div>' +
+        '</div>';
+    }
+
+    function confirmMigradorHtml() {
+        return '<div class="confirm-backdrop" id="migrConfirm"><div class="confirm-box">' +
+            '<div class="confirm-title" id="migrConfirmTitle">Aplicar migración</div>' +
+            '<div class="confirm-msg" id="migrConfirmMsg">Esta acción no se puede deshacer.</div>' +
+            '<div class="confirm-actions">' +
+                '<button class="btn btn-ghost"  type="button" data-act="cancel">Cancelar</button>' +
+                '<button class="btn btn-primary" id="migrConfirmBtn" type="button">Aplicar</button>' +
+            '</div>' +
+        '</div></div>';
+    }
+
+    function migrConfirmar(opts) {
+        opts = opts || {};
+        return new Promise(function (resolve) {
+            var box     = document.getElementById('migrConfirm');
+            var titleEl = document.getElementById('migrConfirmTitle');
+            var msgEl   = document.getElementById('migrConfirmMsg');
+            var btnOk   = document.getElementById('migrConfirmBtn');
+            if (!box || !titleEl || !msgEl || !btnOk) { resolve(false); return; }
+
+            titleEl.textContent = opts.title || 'Confirmar';
+            msgEl.textContent   = opts.message || '¿Continuar?';
+            btnOk.textContent   = opts.confirmText || 'Aplicar';
+            btnOk.classList.remove('btn-primary', 'btn-danger');
+            btnOk.classList.add(opts.danger ? 'btn-danger' : 'btn-primary');
+
+            _migrConfirmResolve = function (val) {
+                box.classList.remove('open');
+                _migrConfirmResolve = null;
+                resolve(val);
+            };
+            box.classList.add('open');
+        });
+    }
+
+    function migrFormatearTamanoBytes(n) {
+        if (typeof n !== 'number' || isNaN(n)) return '—';
+        if (n < 1024)          return n + ' B';
+        if (n < 1024 * 1024)   return (n / 1024).toFixed(1) + ' KB';
+        return (n / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    function abrirMigraciones() {
+        var bd = document.getElementById('migracionesBackdrop');
+        if (!bd) return;
+        bd.classList.add('open');
+        cargarMigraciones();
+    }
+
+    function cerrarMigraciones() {
+        var bd = document.getElementById('migracionesBackdrop');
+        if (bd) bd.classList.remove('open');
+    }
+
+    async function cargarMigraciones() {
+        if (_migrCargando) return;
+        _migrCargando = true;
+        var tbody     = document.getElementById('migrTbody');
+        var dbEl      = document.getElementById('migrDbName');
+        var envEl     = document.getElementById('migrEnvBadge');
+        var resumenEl = document.getElementById('migrResumen');
+        var btnMasivo = document.getElementById('migrBtnAplicarPendientes');
+
+        if (tbody) tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px"><div class="spin"></div></td></tr>';
+        if (resumenEl) resumenEl.textContent = '';
+        if (btnMasivo) { btnMasivo.disabled = true; btnMasivo.textContent = 'Aplicar todas las pendientes'; }
+
+        try {
+            var data = await api('/api/herramientas_migraciones_list.php');
+            migracionesCache = data.items || [];
+            migrDbActual  = data.database || '';
+            migrEnvActual = (data.env || '').toLowerCase();
+
+            if (dbEl)  dbEl.textContent  = migrDbActual || '—';
+            if (envEl) {
+                envEl.textContent = migrEnvActual || '—';
+                envEl.classList.remove('badge-info', 'badge-success', 'badge-warn', 'badge-danger');
+                if (migrEnvActual === 'production')       envEl.classList.add('badge-danger');
+                else if (migrEnvActual === 'development') envEl.classList.add('badge-success');
+                else                                      envEl.classList.add('badge-warn');
+            }
+
+            renderMigraciones(migracionesCache);
+            actualizarResumenMigraciones();
+        } catch (err) {
+            if (tbody) tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--danger)">' + e(err.message || 'Error al cargar migraciones.') + '</td></tr>';
+        } finally {
+            _migrCargando = false;
+        }
+    }
+
+    function renderMigraciones(rows) {
+        var tbody = document.getElementById('migrTbody');
+        if (!tbody) return;
+        if (!rows || rows.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No hay archivos en <code>db/migrations/</code>.</td></tr>';
+            return;
+        }
+
+        var pendientes = rows.filter(function (m) { return m.estado === 'pendiente'; });
+        var aplicadas  = rows.filter(function (m) { return m.estado === 'aplicada'; })
+                             .sort(function (a, b) { return (b.id || 0) - (a.id || 0); });
+        var ordenadas  = pendientes.concat(aplicadas);
+
+        tbody.innerHTML = ordenadas.map(function (m) {
+            var badge;
+            if (m.estado === 'aplicada' && m.hash_drift) {
+                badge = '<span class="badge badge-warn" title="El archivo cambió después de aplicarse">⚠ drift</span>';
+            } else if (m.estado === 'aplicada') {
+                badge = '<span class="badge badge-success">aplicada</span>';
+            } else {
+                badge = '<span class="badge badge-info">pendiente</span>';
+            }
+
+            var aplicadaTxt = m.aplicada
+                ? '<span style="font-family:monospace;font-size:.82rem">' + e(m.aplicada) + '</span>'
+                : '<span style="color:var(--muted)">—</span>';
+
+            var hashCorto = m.hash ? String(m.hash).slice(0, 8) : '—';
+            var acciones = '<div class="actions" style="justify-content:center">' +
+                '<button class="btn btn-ghost btn-sm" type="button" data-act="ver" data-nombre="' + e(m.nombre) + '">Ver SQL</button>';
+            if (m.estado === 'pendiente') {
+                acciones += '<button class="btn btn-primary btn-sm" type="button" data-act="aplicar" data-nombre="' + e(m.nombre) + '">Aplicar</button>';
+            }
+            acciones += '</div>';
+
+            return '<tr>' +
+                '<td>' + badge + '</td>' +
+                '<td style="font-family:monospace;font-weight:600;word-break:break-all">' + e(m.nombre) + '</td>' +
+                '<td style="font-size:.82rem;color:var(--muted)">' + migrFormatearTamanoBytes(m.tamano) + '</td>' +
+                '<td style="font-family:monospace;font-size:.78rem;color:var(--muted)" title="' + e(m.hash || '') + '">' + e(hashCorto) + '</td>' +
+                '<td>' + aplicadaTxt + '</td>' +
+                '<td style="text-align:center">' + acciones + '</td>' +
+            '</tr>';
+        }).join('');
+    }
+
+    function actualizarResumenMigraciones() {
+        var resumenEl = document.getElementById('migrResumen');
+        var btnMasivo = document.getElementById('migrBtnAplicarPendientes');
+        if (!resumenEl || !btnMasivo) return;
+
+        var total       = migracionesCache.length;
+        var aplicadas   = migracionesCache.filter(function (m) { return m.estado === 'aplicada'; }).length;
+        var pendientes  = total - aplicadas;
+        var conDrift    = migracionesCache.filter(function (m) { return m.hash_drift; }).length;
+
+        var txt = total + ' archivo(s) · ' + aplicadas + ' aplicada(s) · ' + pendientes + ' pendiente(s)';
+        if (conDrift > 0) txt += ' · ⚠ ' + conDrift + ' con drift de hash';
+        resumenEl.textContent = txt;
+
+        if (pendientes === 0) {
+            btnMasivo.disabled    = true;
+            btnMasivo.textContent = 'Sin pendientes';
+        } else {
+            btnMasivo.disabled    = _migrAplicando;
+            btnMasivo.textContent = 'Aplicar ' + pendientes + ' pendiente(s)';
+        }
+    }
+
+    async function verMigracion(nombre) {
+        var bd = document.getElementById('migrPreviewBackdrop');
+        var nombreEl = document.getElementById('migrPreviewNombre');
+        var sqlEl    = document.getElementById('migrPreviewSql');
+        var btnApl   = document.getElementById('migrPreviewBtnAplicar');
+        if (!bd || !nombreEl || !sqlEl || !btnApl) return;
+
+        migrPreviewNombreActual = nombre;
+        nombreEl.textContent = nombre;
+        sqlEl.value = 'Cargando…';
+        btnApl.style.display = 'none';
+        bd.classList.add('open');
+
+        try {
+            var data = await api('/api/herramientas_migraciones_get.php?nombre=' + encodeURIComponent(nombre));
+            sqlEl.value = data.contenido || '';
+            var item = migracionesCache.find(function (m) { return m.nombre === nombre; });
+            btnApl.style.display = (item && item.estado === 'pendiente') ? '' : 'none';
+        } catch (err) {
+            sqlEl.value = 'Error: ' + (err.message || 'No se pudo leer la migración.');
+        }
+    }
+
+    function migrPreviewAplicar() {
+        var bd = document.getElementById('migrPreviewBackdrop');
+        if (bd) bd.classList.remove('open');
+        if (migrPreviewNombreActual) {
+            aplicarMigracionConConfirmacion(migrPreviewNombreActual);
+        }
+    }
+
+    function aplicarMigracionDesdeListado(nombre) {
+        aplicarMigracionConConfirmacion(nombre);
+    }
+
+    async function aplicarMigracionConConfirmacion(nombre) {
+        var esProd = migrEnvActual === 'production';
+        var dbTxt  = migrDbActual || 'la base actual';
+        var msg = 'Vas a aplicar «' + nombre + '» contra la base ' + dbTxt +
+                  (esProd ? ' (PRODUCCIÓN)' : '') +
+                  '. Las sentencias DDL no se pueden deshacer. ¿Continuar?';
+        var ok = await migrConfirmar({
+            title:       esProd ? '⚠ Aplicar en PRODUCCIÓN' : 'Aplicar migración',
+            message:     msg,
+            confirmText: esProd ? 'Aplicar en prod' : 'Aplicar',
+            danger:      esProd
+        });
+        if (!ok) return;
+        await aplicarMigracionSinConfirmar(nombre);
+    }
+
+    async function aplicarMigracionSinConfirmar(nombre) {
+        if (_migrAplicando) return;
+        _migrAplicando = true;
+        try {
+            var data = await api('/api/herramientas_migraciones_apply.php', {
+                method: 'POST',
+                body:   { nombre: nombre }
+            });
+            var ms = data && typeof data.duracion_ms === 'number' ? data.duracion_ms : null;
+            toast('Aplicada «' + nombre + '»' + (ms !== null ? ' en ' + ms + ' ms.' : '.'));
+            await cargarMigraciones();
+        } catch (err) {
+            toast(err.message || 'Error al aplicar.', { error: true, duration: 10000 });
+        } finally {
+            _migrAplicando = false;
+        }
+    }
+
+    async function aplicarPendientesMigraciones() {
+        var pendientes = migracionesCache.filter(function (m) { return m.estado === 'pendiente'; });
+        if (pendientes.length === 0) return;
+
+        var esProd = migrEnvActual === 'production';
+        var dbTxt  = migrDbActual || 'la base actual';
+        var msg = 'Vas a aplicar ' + pendientes.length + ' migración(es) contra la base ' + dbTxt +
+                  (esProd ? ' (PRODUCCIÓN)' : '') +
+                  ' en orden alfabético. Si una falla, se detiene la corrida y las anteriores quedan aplicadas. ¿Continuar?';
+        var ok = await migrConfirmar({
+            title:       esProd ? '⚠ Aplicar en PRODUCCIÓN' : 'Aplicar migraciones',
+            message:     msg,
+            confirmText: esProd ? 'Aplicar en prod' : 'Aplicar',
+            danger:      esProd
+        });
+        if (!ok) return;
+
+        var btn = document.getElementById('migrBtnAplicarPendientes');
+        if (btn) btn.disabled = true;
+        _migrAplicando = true;
+
+        var aplicadas = 0;
+        var falloCorte = false;
+
+        for (var i = 0; i < pendientes.length; i++) {
+            var nombre = pendientes[i].nombre;
+            if (btn) btn.textContent = 'Aplicando ' + nombre + '…';
+            try {
+                await api('/api/herramientas_migraciones_apply.php', {
+                    method: 'POST',
+                    body:   { nombre: nombre }
+                });
+                aplicadas++;
+            } catch (err) {
+                toast('Falló «' + nombre + '»: ' + (err.message || 'error desconocido.'), { error: true, duration: 10000 });
+                falloCorte = true;
+                break;
+            }
+        }
+
+        _migrAplicando = false;
+        if (falloCorte) {
+            toast('Corrida parcial: ' + aplicadas + ' de ' + pendientes.length + ' aplicadas.', { error: true, duration: 10000 });
+        } else if (aplicadas > 0) {
+            toast('Aplicadas ' + aplicadas + ' migración(es).');
+        }
+        await cargarMigraciones();
+    }
+
+    function wireMigradorView() {
+        var tile = document.getElementById('cfgTileMigrador');
+        if (tile) tile.addEventListener('click', abrirMigraciones);
+
+        var listBd = document.getElementById('migracionesBackdrop');
+        if (listBd) {
+            listBd.addEventListener('click', function (ev) {
+                if (ev.target === listBd || ev.target.closest('[data-act="close"]')) {
+                    cerrarMigraciones();
+                }
+            });
+        }
+
+        var btnRef = document.getElementById('migrBtnRefrescar');
+        if (btnRef) btnRef.addEventListener('click', cargarMigraciones);
+
+        var btnMas = document.getElementById('migrBtnAplicarPendientes');
+        if (btnMas) btnMas.addEventListener('click', aplicarPendientesMigraciones);
+
+        var tbody = document.getElementById('migrTbody');
+        if (tbody) {
+            tbody.addEventListener('click', function (ev) {
+                var btn = ev.target.closest('button[data-act]');
+                if (!btn) return;
+                var act = btn.getAttribute('data-act');
+                var nombre = btn.getAttribute('data-nombre') || '';
+                if (!nombre) return;
+                if (act === 'ver')      verMigracion(nombre);
+                if (act === 'aplicar')  aplicarMigracionDesdeListado(nombre);
+            });
+        }
+
+        var prevBd = document.getElementById('migrPreviewBackdrop');
+        if (prevBd) {
+            prevBd.addEventListener('click', function (ev) {
+                if (ev.target === prevBd || ev.target.closest('[data-act="close"]')) {
+                    prevBd.classList.remove('open');
+                }
+            });
+        }
+        var btnPrevApl = document.getElementById('migrPreviewBtnAplicar');
+        if (btnPrevApl) btnPrevApl.addEventListener('click', migrPreviewAplicar);
+
+        var confBox = document.getElementById('migrConfirm');
+        if (confBox) {
+            confBox.addEventListener('click', function (ev) {
+                var cancel = ev.target.closest('[data-act="cancel"]');
+                if (cancel && _migrConfirmResolve) { _migrConfirmResolve(false); return; }
+                if (ev.target === confBox && _migrConfirmResolve) { _migrConfirmResolve(false); }
+            });
+            var btnOk = document.getElementById('migrConfirmBtn');
+            if (btnOk) btnOk.addEventListener('click', function () {
+                if (_migrConfirmResolve) _migrConfirmResolve(true);
+            });
+        }
+
+        if (!wireMigradorView._escBound) {
+            wireMigradorView._escBound = true;
+            document.addEventListener('keydown', function (ev) {
+                if (ev.key !== 'Escape') return;
+                var conf = document.getElementById('migrConfirm');
+                if (conf && conf.classList.contains('open')) {
+                    if (_migrConfirmResolve) _migrConfirmResolve(false);
+                    ev.stopImmediatePropagation();
+                    return;
+                }
+                var prev = document.getElementById('migrPreviewBackdrop');
+                if (prev && prev.classList.contains('open')) {
+                    prev.classList.remove('open');
+                    ev.stopImmediatePropagation();
+                    return;
+                }
+                var listado = document.getElementById('migracionesBackdrop');
+                if (listado && listado.classList.contains('open')) {
+                    cerrarMigraciones();
+                    ev.stopImmediatePropagation();
+                }
+            }, true);
+        }
+    }
+
+    // -------- Vista: Explorador DB (Herramientas) -------------------------
+
+    var dbExpTablas       = [];
+    var dbExpFiltro       = '';
+    var dbExpTablaActual  = null;
+    var dbExpDbName       = '';
+    var dbExpEnv          = '';
+    var dbExpCargando     = false;
+
+    var dbExpRegistros    = [];
+    var dbExpPkCols       = [];
+    var dbExpAutoIncCols  = [];
+    var dbExpNullableCols = [];
+    var dbExpColsTabla    = [];
+    var dbExpRegsTotal    = 0;
+    var dbExpLimite       = 50;
+    var dbExpFiltroRegs   = '';
+
+    function modalExploradorDBHtml() {
+        return '<div class="modal-backdrop" id="dbExpModalBackdrop">' +
+            '<div class="modal db-exp-modal">' +
+                '<div class="modal-header">' +
+                    '<div class="modal-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+                        '<span style="font-size:1.2rem">🗄️</span>' +
+                        '<span>Explorador DB</span>' +
+                        '<span class="badge badge-info" id="dbExpDbName" style="font-family:monospace">—</span>' +
+                        '<span class="badge" id="dbExpEnvBadge" style="font-family:monospace">—</span>' +
+                    '</div>' +
+                    '<button class="btn-icon-sm" type="button" data-act="close" aria-label="Cerrar">&times;</button>' +
+                '</div>' +
+                '<div class="modal-body">' +
+                    '<div class="db-exp-toolbar">' +
+                        '<div class="db-exp-breadcrumbs" id="dbExpBreadcrumbs"></div>' +
+                        '<div class="db-exp-toolbar-right">' +
+                            '<button class="btn btn-ghost btn-icon" type="button" title="Refrescar" id="dbExpBtnRefrescar">' +
+                                '<i class="fa-solid fa-rotate"></i>' +
+                            '</button>' +
+                            '<div class="search-wrap" id="dbExpSearchWrap" style="display:none">' +
+                                '<input type="search" id="dbExpSearch" class="search-input" placeholder="Buscar tabla…">' +
+                                '<button class="search-clear" type="button" id="dbExpSearchClear">&times;</button>' +
+                            '</div>' +
+                        '</div>' +
+                    '</div>' +
+
+                    '<div class="db-exp-view" id="dbExpViewTables">' +
+                        '<div class="table-card db-exp-table-card">' +
+                            '<table>' +
+                                '<thead><tr>' +
+                                    '<th style="width:36px"></th>' +
+                                    '<th>Tabla</th>' +
+                                    '<th style="width:140px">Filas (aprox.)</th>' +
+                                    '<th style="width:120px">Engine</th>' +
+                                '</tr></thead>' +
+                                '<tbody id="dbExpTablesTbody">' +
+                                    '<tr><td colspan="4" style="text-align:center;padding:24px"><div class="spin"></div></td></tr>' +
+                                '</tbody>' +
+                            '</table>' +
+                        '</div>' +
+                        '<div class="db-exp-footer-info" id="dbExpTablesInfo"></div>' +
+                    '</div>' +
+
+                    '<div class="db-exp-view db-exp-view-detail" id="dbExpViewDetail" style="display:none">' +
+                        '<div class="db-exp-tabs" role="tablist">' +
+                            '<button type="button" class="db-exp-tab active" role="tab" data-tab="recs">' +
+                                '<i class="fa-solid fa-table"></i> Registros' +
+                                '<span class="db-exp-tab-count" id="dbExpRecsMeta"></span>' +
+                            '</button>' +
+                            '<button type="button" class="db-exp-tab" role="tab" data-tab="cols">' +
+                                '<i class="fa-solid fa-list-ul"></i> Campos' +
+                                '<span class="db-exp-tab-count" id="dbExpColsMeta"></span>' +
+                            '</button>' +
+                        '</div>' +
+
+                        '<div class="db-exp-tabpanel" id="dbExpTabRecs" role="tabpanel">' +
+                            '<div class="db-exp-recs-toolbar">' +
+                                '<div class="db-exp-recs-toolbar-left">' +
+                                    '<label class="db-exp-limite-label">Límite ' +
+                                        '<select id="dbExpLimite">' +
+                                            '<option value="10">10</option>' +
+                                            '<option value="50" selected>50</option>' +
+                                            '<option value="100">100</option>' +
+                                            '<option value="200">200</option>' +
+                                            '<option value="500">500</option>' +
+                                        '</select>' +
+                                    '</label>' +
+                                '</div>' +
+                                '<div class="db-exp-recs-toolbar-right">' +
+                                    '<div class="search-wrap">' +
+                                        '<input type="search" id="dbExpRecsSearch" class="search-input" placeholder="Buscar en los registros…">' +
+                                        '<button class="search-clear" type="button" id="dbExpRecsSearchClear">&times;</button>' +
+                                    '</div>' +
+                                '</div>' +
+                            '</div>' +
+                            '<div class="table-card db-exp-table-card db-exp-recs-card db-exp-fill">' +
+                                '<table id="dbExpRecsTable">' +
+                                    '<thead><tr><th></th></tr></thead>' +
+                                    '<tbody id="dbExpRecsTbody">' +
+                                        '<tr><td style="text-align:center;padding:24px"><div class="spin"></div></td></tr>' +
+                                    '</tbody>' +
+                                '</table>' +
+                            '</div>' +
+                        '</div>' +
+
+                        '<div class="db-exp-tabpanel" id="dbExpTabCols" role="tabpanel" hidden>' +
+                            '<div class="table-card db-exp-table-card db-exp-fill">' +
+                                '<table>' +
+                                    '<thead><tr>' +
+                                        '<th style="width:36px">#</th>' +
+                                        '<th>Campo</th>' +
+                                        '<th>Tipo</th>' +
+                                        '<th style="width:70px">Null</th>' +
+                                        '<th style="width:70px">Clave</th>' +
+                                        '<th>Default</th>' +
+                                        '<th>Extra</th>' +
+                                    '</tr></thead>' +
+                                    '<tbody id="dbExpColsTbody">' +
+                                        '<tr><td colspan="7" style="text-align:center;padding:24px"><div class="spin"></div></td></tr>' +
+                                    '</tbody>' +
+                                '</table>' +
+                            '</div>' +
+                        '</div>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="modal-footer">' +
+                    '<button class="btn btn-ghost" type="button" data-act="close">Cerrar</button>' +
+                '</div>' +
+            '</div>' +
+        '</div>';
+    }
+
+    function abrirExploradorDB() {
+        var bd = document.getElementById('dbExpModalBackdrop');
+        if (!bd) return;
+        dbExpTablaActual = null;
+        dbExpFiltro      = '';
+        dbExpFiltroRegs  = '';
+        var s = document.getElementById('dbExpSearch');
+        if (s) s.value = '';
+        dbExpMostrarVista('tables');
+        bd.classList.add('open');
+        dbExpCargarTablas();
+    }
+
+    function cerrarExploradorDB() {
+        var bd = document.getElementById('dbExpModalBackdrop');
+        if (bd) bd.classList.remove('open');
+    }
+
+    function dbExpRecargar() {
+        if (dbExpTablaActual) {
+            dbExpAbrirTabla(dbExpTablaActual);
+        } else {
+            dbExpCargarTablas();
+        }
+    }
+
+    function dbExpMostrarVista(v) {
+        var tables = document.getElementById('dbExpViewTables');
+        var detail = document.getElementById('dbExpViewDetail');
+        var sw     = document.getElementById('dbExpSearchWrap');
+        if (v === 'tables') {
+            if (tables) tables.style.display = '';
+            if (detail) detail.style.display = 'none';
+            if (sw)     sw.style.display     = '';
+        } else {
+            if (tables) tables.style.display = 'none';
+            if (detail) detail.style.display = '';
+            if (sw)     sw.style.display     = 'none';
+        }
+        dbExpRenderBreadcrumbs();
+    }
+
+    function dbExpRenderBreadcrumbs() {
+        var el = document.getElementById('dbExpBreadcrumbs');
+        if (!el) return;
+        var html = '';
+        if (dbExpTablaActual) {
+            html += '<button type="button" class="db-exp-crumb" id="dbExpCrumbDb">' +
+                    '🗄️ ' + e(dbExpDbName || '—') + '</button>';
+            html += '<span class="db-exp-crumb-sep">/</span>';
+            html += '<span class="db-exp-crumb current">' + e(dbExpTablaActual) + '</span>';
+        } else {
+            html += '<span class="db-exp-crumb current">🗄️ ' + e(dbExpDbName || '—') + '</span>';
+        }
+        el.innerHTML = html;
+        var back = document.getElementById('dbExpCrumbDb');
+        if (back) back.addEventListener('click', dbExpVolverATablas);
+    }
+
+    function dbExpVolverATablas() {
+        dbExpTablaActual = null;
+        dbExpFiltroRegs  = '';
+        var s = document.getElementById('dbExpRecsSearch');
+        if (s) s.value = '';
+        dbExpMostrarVista('tables');
+        dbExpRenderTablas();
+    }
+
+    async function dbExpCargarTablas() {
+        if (dbExpCargando) return;
+        dbExpCargando = true;
+        var tbody = document.getElementById('dbExpTablesTbody');
+        var info  = document.getElementById('dbExpTablesInfo');
+        if (tbody) tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px"><div class="spin"></div></td></tr>';
+        if (info)  info.textContent = '';
+        try {
+            var data = await api('/api/herramientas_db_tables.php');
+            dbExpTablas = data.tablas || [];
+            dbExpDbName = data.database || '';
+            dbExpEnv    = (data.env || '').toLowerCase();
+
+            var dbEl = document.getElementById('dbExpDbName');
+            if (dbEl) dbEl.textContent = dbExpDbName || '—';
+            var envEl = document.getElementById('dbExpEnvBadge');
+            if (envEl) {
+                envEl.textContent = dbExpEnv || '—';
+                envEl.classList.remove('badge-info', 'badge-success', 'badge-warn', 'badge-danger');
+                if (dbExpEnv === 'production')       envEl.classList.add('badge-danger');
+                else if (dbExpEnv === 'development') envEl.classList.add('badge-success');
+                else                                 envEl.classList.add('badge-warn');
+            }
+            dbExpRenderBreadcrumbs();
+            dbExpRenderTablas();
+        } catch (err) {
+            if (tbody) tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:20px;color:var(--danger)">' +
+                e(err.message || 'Error al cargar tablas.') + '</td></tr>';
+        } finally {
+            dbExpCargando = false;
+        }
+    }
+
+    function dbExpRenderTablas() {
+        var tbody = document.getElementById('dbExpTablesTbody');
+        var info  = document.getElementById('dbExpTablesInfo');
+        if (!tbody) return;
+
+        var q = dbExpFiltro.trim().toLowerCase();
+        var rows = dbExpTablas.filter(function (t) {
+            if (!q) return true;
+            return (t.nombre || '').toLowerCase().indexOf(q) !== -1 ||
+                   (t.comentario || '').toLowerCase().indexOf(q) !== -1;
+        });
+
+        if (rows.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4" class="db-exp-empty">' +
+                (q ? 'Sin resultados para el filtro.' : 'No hay tablas en esta base.') + '</td></tr>';
+        } else {
+            tbody.innerHTML = rows.map(function (t) {
+                var filas = (t.filas_aprox === null || t.filas_aprox === undefined)
+                    ? '—'
+                    : dbExpFmtNum(t.filas_aprox);
+                var coment = t.comentario ? '<div class="db-exp-coment">' + e(t.comentario) + '</div>' : '';
+                return '<tr class="row-clickable" data-tabla="' + e(t.nombre) + '">' +
+                    '<td><i class="fa-solid fa-table" style="color:var(--info)"></i></td>' +
+                    '<td><div class="db-exp-nombre">' + e(t.nombre) + '</div>' + coment + '</td>' +
+                    '<td class="db-exp-num">' + filas + '</td>' +
+                    '<td class="db-exp-mono">' + e(t.engine || '—') + '</td>' +
+                '</tr>';
+            }).join('');
+        }
+
+        if (info) {
+            var total = dbExpTablas.length;
+            var txt = rows.length + ' tabla(s)';
+            if (q) txt += ' (filtradas de ' + total + ')';
+            info.innerHTML = '<span>' + e(txt) + '</span><span></span>';
+        }
+    }
+
+    function dbExpFmtNum(n) {
+        if (typeof n !== 'number') n = Number(n);
+        if (isNaN(n)) return '—';
+        try { return n.toLocaleString('es-AR'); }
+        catch (_) { return String(n); }
+    }
+
+    function dbExpFiltrarTablas() {
+        var s = document.getElementById('dbExpSearch');
+        dbExpFiltro = s ? s.value : '';
+        dbExpRenderTablas();
+    }
+
+    function dbExpLimpiarBuscador() {
+        var s = document.getElementById('dbExpSearch');
+        if (s) s.value = '';
+        dbExpFiltro = '';
+        dbExpRenderTablas();
+    }
+
+    async function dbExpAbrirTabla(nombre) {
+        dbExpTablaActual = nombre;
+        dbExpFiltroRegs  = '';
+        var srch = document.getElementById('dbExpRecsSearch');
+        if (srch) srch.value = '';
+        dbExpMostrarVista('detail');
+        dbExpCambiarTab('recs');
+
+        var colsTbody = document.getElementById('dbExpColsTbody');
+        if (colsTbody) colsTbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:24px"><div class="spin"></div></td></tr>';
+        var recsTbody = document.getElementById('dbExpRecsTbody');
+        if (recsTbody) recsTbody.innerHTML = '<tr><td style="text-align:center;padding:24px"><div class="spin"></div></td></tr>';
+
+        var pCols = api('/api/herramientas_db_describe.php?tabla=' + encodeURIComponent(nombre))
+            .then(function (data) { dbExpRenderColumnas(data.columnas || []); })
+            .catch(function (err) {
+                if (colsTbody) colsTbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--danger)">' +
+                    e(err.message || 'Error al cargar columnas.') + '</td></tr>';
+            });
+        var pRecs = dbExpCargarRegistros(nombre);
+        await Promise.all([pCols, pRecs]);
+    }
+
+    function dbExpCambiarTab(tab) {
+        var tabs = document.querySelectorAll('#dbExpViewDetail .db-exp-tab');
+        tabs.forEach(function (t) {
+            t.classList.toggle('active', t.getAttribute('data-tab') === tab);
+        });
+        var pRecs = document.getElementById('dbExpTabRecs');
+        var pCols = document.getElementById('dbExpTabCols');
+        if (pRecs) { if (tab === 'recs') pRecs.removeAttribute('hidden'); else pRecs.setAttribute('hidden', ''); }
+        if (pCols) { if (tab === 'cols') pCols.removeAttribute('hidden'); else pCols.setAttribute('hidden', ''); }
+    }
+
+    function dbExpRenderColumnas(cols) {
+        var tbody = document.getElementById('dbExpColsTbody');
+        var meta  = document.getElementById('dbExpColsMeta');
+        if (meta) meta.textContent = cols.length;
+        if (!tbody) return;
+        if (cols.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" class="db-exp-empty">Sin columnas.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = cols.map(function (c) {
+            var nullBadge = (c.nullable === 'YES')
+                ? '<span class="badge badge-warn">SÍ</span>'
+                : '<span class="badge badge-muted">NO</span>';
+            var claveBadge = '';
+            if (c.clave === 'PRI')      claveBadge = '<span class="badge badge-warn">PK</span>';
+            else if (c.clave === 'UNI') claveBadge = '<span class="badge badge-info">UQ</span>';
+            else if (c.clave === 'MUL') claveBadge = '<span class="badge" style="background:rgba(139,92,246,.18);color:#c4b5fd">IDX</span>';
+            var def = (c.predeterminado === null || c.predeterminado === undefined)
+                ? '<span class="db-exp-null">NULL</span>'
+                : '<code style="font-family:monospace">' + e(String(c.predeterminado)) + '</code>';
+            var extra = c.extra
+                ? '<code style="font-family:monospace">' + e(c.extra) + '</code>'
+                : '';
+            var coment = c.comentario ? '<div class="db-exp-coment">' + e(c.comentario) + '</div>' : '';
+            return '<tr>' +
+                '<td class="db-exp-num">' + e(c.posicion) + '</td>' +
+                '<td><div class="db-exp-col-nombre">' + e(c.nombre) + '</div>' + coment + '</td>' +
+                '<td><span class="db-exp-mono">' + e(c.tipo) + '</span></td>' +
+                '<td>' + nullBadge + '</td>' +
+                '<td>' + claveBadge + '</td>' +
+                '<td>' + def + '</td>' +
+                '<td>' + extra + '</td>' +
+            '</tr>';
+        }).join('');
+    }
+
+    async function dbExpCargarRegistros(nombre) {
+        var tbody = document.getElementById('dbExpRecsTbody');
+        var meta  = document.getElementById('dbExpRecsMeta');
+        if (tbody) tbody.innerHTML = '<tr><td style="text-align:center;padding:24px"><div class="spin"></div></td></tr>';
+        if (meta)  meta.textContent = '…';
+        try {
+            var qs = '?tabla=' + encodeURIComponent(nombre) + '&limite=' + dbExpLimite;
+            var data = await api('/api/herramientas_db_records.php' + qs);
+            dbExpRenderRegistros(data);
+        } catch (err) {
+            if (tbody) tbody.innerHTML = '<tr><td style="text-align:center;padding:20px;color:var(--danger)">' +
+                e(err.message || 'Error al cargar registros.') + '</td></tr>';
+            if (meta) meta.textContent = '!';
+        }
+    }
+
+    function dbExpRenderRegistros(payload) {
+        dbExpRegistros    = payload.registros || [];
+        dbExpPkCols       = payload.pk        || [];
+        dbExpAutoIncCols  = payload.auto_inc  || [];
+        dbExpNullableCols = payload.nullable  || [];
+        dbExpColsTabla    = payload.columnas  || [];
+        dbExpRegsTotal    = payload.total || 0;
+
+        var thead = document.querySelector('#dbExpRecsTable thead');
+        if (thead) {
+            thead.innerHTML = '<tr>' + dbExpColsTabla.map(function (c) {
+                var esPk = dbExpPkCols.indexOf(c) !== -1;
+                var icon = esPk ? ' <i class="fa-solid fa-key" style="color:var(--warn);font-size:.75rem" title="PK"></i>' : '';
+                return '<th style="white-space:nowrap">' + e(c) + icon + '</th>';
+            }).join('') + '</tr>';
+        }
+        dbExpPintarRegistros();
+    }
+
+    function dbExpPintarRegistros() {
+        var tbody = document.getElementById('dbExpRecsTbody');
+        var meta  = document.getElementById('dbExpRecsMeta');
+        if (!tbody) return;
+
+        var q = dbExpFiltroRegs.trim().toLowerCase();
+        var filtrados = [];
+        for (var i = 0; i < dbExpRegistros.length; i++) {
+            var reg = dbExpRegistros[i];
+            if (q) {
+                var hay = false;
+                for (var j = 0; j < dbExpColsTabla.length; j++) {
+                    var v = reg[dbExpColsTabla[j]];
+                    if (v !== null && v !== undefined && String(v).toLowerCase().indexOf(q) !== -1) {
+                        hay = true; break;
+                    }
+                }
+                if (!hay) continue;
+            }
+            filtrados.push({ idx: i, reg: reg });
+        }
+
+        var sinPk = dbExpPkCols.length === 0;
+        var colspan = Math.max(1, dbExpColsTabla.length);
+
+        if (dbExpRegistros.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="' + colspan + '" class="db-exp-empty">Esta tabla está vacía.</td></tr>';
+        } else if (filtrados.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="' + colspan + '" class="db-exp-empty">Sin resultados para "' + e(dbExpFiltroRegs) + '".</td></tr>';
+        } else {
+            tbody.innerHTML = filtrados.map(function (item) {
+                var reg = item.reg;
+                var tds = dbExpColsTabla.map(function (col) {
+                    var editable = !sinPk
+                        && dbExpPkCols.indexOf(col) === -1
+                        && dbExpAutoIncCols.indexOf(col) === -1;
+                    var cls, title, dbl;
+                    if (sinPk) {
+                        cls = 'db-exp-cell-lock'; title = 'No editable: la tabla no tiene PK'; dbl = '';
+                    } else if (dbExpPkCols.indexOf(col) !== -1) {
+                        cls = 'db-exp-cell-lock'; title = 'No editable: PK'; dbl = '';
+                    } else if (dbExpAutoIncCols.indexOf(col) !== -1) {
+                        cls = 'db-exp-cell-lock'; title = 'No editable: auto_increment'; dbl = '';
+                    } else {
+                        cls = 'db-exp-cell-edit'; title = 'Doble click para editar';
+                        dbl = ' ondblclick="dbExpEditarCelda(this)"';
+                    }
+                    return '<td class="' + cls + '" data-col="' + e(col) + '" title="' + e(title) + '"' + dbl + '>' +
+                        dbExpFmtValor(reg[col]) + '</td>';
+                }).join('');
+                return '<tr data-row="' + item.idx + '">' + tds + '</tr>';
+            }).join('');
+        }
+
+        if (meta) {
+            var visibles = filtrados.length;
+            var cargados = dbExpRegistros.length;
+            var txt = visibles + '/' + dbExpRegsTotal;
+            if (q && visibles !== cargados) {
+                txt += ' (filtrados de ' + cargados + ')';
+            }
+            if (sinPk && dbExpRegistros.length > 0) {
+                txt += ' · solo lectura';
+            }
+            meta.textContent = txt;
+        }
+    }
+
+    function dbExpCambiarLimite() {
+        var sel = document.getElementById('dbExpLimite');
+        if (!sel) return;
+        var v = parseInt(sel.value, 10);
+        if (isNaN(v) || v < 1) v = 50;
+        dbExpLimite = v;
+        if (dbExpTablaActual) dbExpCargarRegistros(dbExpTablaActual);
+    }
+
+    function dbExpFiltrarRegistros() {
+        var s = document.getElementById('dbExpRecsSearch');
+        dbExpFiltroRegs = s ? s.value : '';
+        dbExpPintarRegistros();
+    }
+
+    function dbExpLimpiarBuscadorRegs() {
+        var s = document.getElementById('dbExpRecsSearch');
+        if (s) s.value = '';
+        dbExpFiltroRegs = '';
+        dbExpPintarRegistros();
+    }
+
+    function dbExpFmtValor(v) {
+        if (v === null || v === undefined) return '<span class="db-exp-null">NULL</span>';
+        if (v === '')                       return '<span class="db-exp-null">""</span>';
+        return e(String(v));
+    }
+
+    function dbExpEditarCelda(td) {
+        if (!td || td.querySelector('input')) return;
+        var tr = td.parentElement;
+        if (!tr) return;
+        var rowIdx = parseInt(tr.getAttribute('data-row'), 10);
+        var col    = td.getAttribute('data-col') || '';
+        var reg    = dbExpRegistros[rowIdx];
+        if (!reg || !col) return;
+
+        var valorActual = reg[col];
+        var valorStr = (valorActual === null || valorActual === undefined) ? '' : String(valorActual);
+        var admiteNull = dbExpNullableCols.indexOf(col) !== -1;
+
+        td.classList.add('db-exp-cell-editing');
+        var actions = '<button type="button" class="btn-icon-sm" data-act="guardar" title="Guardar">✓</button>' +
+                      '<button type="button" class="btn-icon-sm" data-act="cancelar" title="Cancelar">✗</button>';
+        if (admiteNull) {
+            actions += '<button type="button" class="btn-icon-sm" data-act="null" title="Setear NULL">⊘</button>';
+        }
+        td.innerHTML = '<div class="db-exp-edit-wrap">' +
+            '<input class="db-exp-edit-input" type="text" value="' + e(valorStr) + '">' +
+            '<div class="db-exp-edit-actions">' + actions + '</div>' +
+        '</div>';
+
+        var input = td.querySelector('input');
+        if (input) {
+            input.focus();
+            input.select();
+        }
+
+        function cerrar() {
+            td.classList.remove('db-exp-cell-editing', 'db-exp-cell-saving');
+            td.innerHTML = dbExpFmtValor(dbExpRegistros[rowIdx][col]);
+        }
+
+        async function guardar(nuevoValor) {
+            var original = dbExpRegistros[rowIdx][col];
+            var mismo = (nuevoValor === null && (original === null || original === undefined))
+                     || (nuevoValor !== null && String(nuevoValor) === String(original));
+            if (mismo) { cerrar(); return; }
+
+            td.classList.add('db-exp-cell-saving');
+            try {
+                var pkPayload = {};
+                for (var k = 0; k < dbExpPkCols.length; k++) {
+                    var pkc = dbExpPkCols[k];
+                    pkPayload[pkc] = reg[pkc];
+                }
+                var data = await api('/api/herramientas_db_update.php', {
+                    method: 'POST',
+                    body:   {
+                        tabla:   dbExpTablaActual,
+                        columna: col,
+                        pk:      pkPayload,
+                        valor:   nuevoValor
+                    }
+                });
+                dbExpRegistros[rowIdx][col] = data.valor_guardado;
+                td.classList.remove('db-exp-cell-editing', 'db-exp-cell-saving');
+                td.innerHTML = dbExpFmtValor(data.valor_guardado);
+                td.classList.add('db-exp-cell-ok');
+                setTimeout(function () { td.classList.remove('db-exp-cell-ok'); }, 900);
+            } catch (err) {
+                td.classList.remove('db-exp-cell-saving');
+                toast(err.message || 'Error al guardar.', { error: true });
+                var inp = td.querySelector('input');
+                if (inp) inp.focus();
+            }
+        }
+
+        input.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Enter') {
+                ev.preventDefault(); ev.stopPropagation();
+                guardar(input.value);
+            } else if (ev.key === 'Escape') {
+                ev.preventDefault(); ev.stopPropagation();
+                cerrar();
+            }
+        });
+        td.querySelectorAll('button[data-act]').forEach(function (btn) {
+            btn.addEventListener('click', function (ev) {
+                ev.preventDefault(); ev.stopPropagation();
+                var act = btn.getAttribute('data-act');
+                if (act === 'guardar')  guardar(input.value);
+                if (act === 'cancelar') cerrar();
+                if (act === 'null')     guardar(null);
+            });
+        });
+    }
+    window.dbExpEditarCelda = dbExpEditarCelda;
+
+    function wireExploradorDBView() {
+        var tile = document.getElementById('cfgTileExpDB');
+        if (tile) tile.addEventListener('click', abrirExploradorDB);
+
+        var bd = document.getElementById('dbExpModalBackdrop');
+        if (bd) {
+            bd.addEventListener('click', function (ev) {
+                if (ev.target === bd || ev.target.closest('[data-act="close"]')) {
+                    cerrarExploradorDB();
+                }
+            });
+        }
+
+        var btnRef = document.getElementById('dbExpBtnRefrescar');
+        if (btnRef) btnRef.addEventListener('click', dbExpRecargar);
+
+        var search = document.getElementById('dbExpSearch');
+        if (search) search.addEventListener('input', dbExpFiltrarTablas);
+        var searchClear = document.getElementById('dbExpSearchClear');
+        if (searchClear) searchClear.addEventListener('click', dbExpLimpiarBuscador);
+
+        var tbody = document.getElementById('dbExpTablesTbody');
+        if (tbody) {
+            tbody.addEventListener('click', function (ev) {
+                var tr = ev.target.closest('tr[data-tabla]');
+                if (!tr) return;
+                var nombre = tr.getAttribute('data-tabla');
+                if (nombre) dbExpAbrirTabla(nombre);
+            });
+        }
+
+        var tabsWrap = document.querySelector('#dbExpViewDetail .db-exp-tabs');
+        if (tabsWrap) {
+            tabsWrap.addEventListener('click', function (ev) {
+                var btn = ev.target.closest('.db-exp-tab');
+                if (!btn) return;
+                var tab = btn.getAttribute('data-tab');
+                if (tab) dbExpCambiarTab(tab);
+            });
+        }
+
+        var limSel = document.getElementById('dbExpLimite');
+        if (limSel) limSel.addEventListener('change', dbExpCambiarLimite);
+
+        var recsSearch = document.getElementById('dbExpRecsSearch');
+        if (recsSearch) recsSearch.addEventListener('input', dbExpFiltrarRegistros);
+        var recsClear = document.getElementById('dbExpRecsSearchClear');
+        if (recsClear) recsClear.addEventListener('click', dbExpLimpiarBuscadorRegs);
+
+        if (!wireExploradorDBView._escBound) {
+            wireExploradorDBView._escBound = true;
+            document.addEventListener('keydown', function (ev) {
+                if (ev.key !== 'Escape') return;
+                var back = document.getElementById('dbExpModalBackdrop');
+                if (back && back.classList.contains('open')) {
+                    cerrarExploradorDB();
+                    ev.stopImmediatePropagation();
+                }
+            }, true);
+        }
+    }
+
+    // -------- Vista: Programador de tareas (Herramientas) ----------------
+
+    var tareasCache             = [];
+    var tareasFiltroQ           = '';
+    var tareasFiltroActivo      = '1';
+    var _tareasSearchTimer      = null;
+    var tareasCtxRegistroId     = null;
+    var ejecucionesTareaSel     = null;   // { id, nombre }
+    var ejecucionesFiltroEstado = '';
+    var ejecucionesCache        = [];
+    var ejecucionesCtxRegistroId = null;
+    var terminalES              = null;
+    var terminalEjecucionActual = null;
+    var terminalAutoscroll      = true;
+    var _tareasConfirmResolve   = null;
+    var cronPickerState         = null;
+    var _tareasEditandoId       = 0;
+
+    var CRON_CAMPOS = ['min', 'hour', 'dom', 'month', 'dow'];
+    var CRON_CAMPO_LABEL = {
+        min:   { label: 'Minuto',            rango: '(0-59)',  emoji: '⏱️' },
+        hour:  { label: 'Hora',              rango: '(0-23)',  emoji: '🕐' },
+        dom:   { label: 'Día del mes',       rango: '(1-31)',  emoji: '📅' },
+        month: { label: 'Mes',               rango: '(1-12)',  emoji: '🗓️' },
+        dow:   { label: 'Día de la semana',  rango: '(0-6)',   emoji: '🗓️' }
+    };
+    var CRON_PICKER_CFG = {
+        min:   { min: 0, max: 59, formato: function (n) { return String(n).padStart(2, '0'); }, titulo: 'Elegir minutos' },
+        hour:  { min: 0, max: 23, formato: function (n) { return String(n).padStart(2, '0'); }, titulo: 'Elegir horas' },
+        dom:   { min: 1, max: 31, formato: function (n) { return String(n); },                  titulo: 'Elegir día del mes' },
+        month: { min: 1, max: 12, formato: function (n) { return cronNombreMesCorto(n); },      titulo: 'Elegir mes' },
+        dow:   { min: 0, max: 6,  formato: function (n) { return cronNombreDiaCorto(n); },
+                 orden: [1, 2, 3, 4, 5, 6, 0],                                                  titulo: 'Elegir día de la semana' }
+    };
+
+    // ---- HTML de modales ----
+
+    function modalTareasListaHtml() {
+        return '<div class="modal-backdrop" id="tareasBackdrop">' +
+            '<div class="modal" style="max-width:1080px;display:flex;flex-direction:column;max-height:90vh;overflow:hidden">' +
+                '<div class="modal-header" style="flex-shrink:0">' +
+                    '<div class="modal-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+                        '<span style="font-size:1.2rem">⏰</span>' +
+                        '<span>Programador de tareas</span>' +
+                        '<span id="tareasResumen" class="modal-subtitle"></span>' +
+                    '</div>' +
+                    '<button class="btn-icon-sm" type="button" data-act="close" aria-label="Cerrar">&times;</button>' +
+                '</div>' +
+                '<div class="modal-body" style="gap:12px;flex:1;overflow:hidden;min-height:0;display:flex;flex-direction:column">' +
+                    '<div class="toolbar" style="margin-bottom:0">' +
+                        '<div class="toolbar-left" style="gap:8px;flex-wrap:wrap">' +
+                            '<div class="search-wrap">' +
+                                '<input class="search-input" type="search" id="tareasSearch" placeholder="🔍 Buscar nombre, script, cron…">' +
+                                '<button class="search-clear" id="tareasSearchClear" type="button" style="display:none">&times;</button>' +
+                            '</div>' +
+                            '<div id="tareasEstadoChips" style="display:flex;gap:6px;flex-wrap:wrap">' +
+                                '<button type="button" class="filter-chip" data-val="">Todas</button>' +
+                                '<button type="button" class="filter-chip active" data-val="1">Activas</button>' +
+                                '<button type="button" class="filter-chip" data-val="0">Inactivas</button>' +
+                            '</div>' +
+                            '<button class="btn btn-ghost btn-icon" type="button" id="tareasBtnRefrescar" title="Refrescar"><i class="fa-solid fa-rotate"></i></button>' +
+                        '</div>' +
+                        '<div class="toolbar-right">' +
+                            '<button class="btn btn-primary" type="button" id="tareasBtnNueva">+ Nueva tarea</button>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="table-card" style="flex:1;overflow-y:auto;min-height:0">' +
+                        '<table>' +
+                            '<thead style="position:sticky;top:0;background:var(--bg);z-index:1"><tr>' +
+                                '<th style="width:70px">Código</th>' +
+                                '<th>Nombre</th>' +
+                                '<th style="width:140px">Cron</th>' +
+                                '<th style="width:120px">Estado</th>' +
+                                '<th style="width:160px">Última corrida</th>' +
+                                '<th style="width:80px">Activa</th>' +
+                                '<th style="width:70px;text-align:center">Acciones</th>' +
+                            '</tr></thead>' +
+                            '<tbody id="tareasTbody">' +
+                                '<tr><td colspan="7" style="text-align:center;padding:20px"><div class="spin"></div></td></tr>' +
+                            '</tbody>' +
+                        '</table>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="modal-footer" style="flex-shrink:0">' +
+                    '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+                '</div>' +
+            '</div>' +
+        '</div>';
+    }
+
+    function modalTareaFormHtml() {
+        return '<div class="modal-backdrop" id="formTareaBackdrop">' +
+            '<div class="modal" style="max-width:640px">' +
+                '<div class="modal-header">' +
+                    '<div class="modal-title">' +
+                        '<span id="formTareaTitulo">Nueva tarea</span>' +
+                        '<span class="modal-subtitle" id="formTareaSub"></span>' +
+                    '</div>' +
+                    '<button class="btn-icon-sm" type="button" data-act="close" aria-label="Cerrar">&times;</button>' +
+                '</div>' +
+                '<form id="formTarea" novalidate>' +
+                    '<input type="hidden" id="formTareaId" value="">' +
+                    '<div class="modal-body">' +
+                        '<div class="form-group"><label for="formTareaNombre">Nombre</label>' +
+                            '<input id="formTareaNombre" type="text" maxlength="120" required>' +
+                            '<div class="field-error" data-err="Nombre"></div>' +
+                        '</div>' +
+                        '<div class="form-group"><label for="formTareaDescripcion">Descripción (opcional)</label>' +
+                            '<input id="formTareaDescripcion" type="text" maxlength="255">' +
+                        '</div>' +
+                        '<div class="form-group"><label for="formTareaScript">Script</label>' +
+                            '<div style="display:flex;gap:6px">' +
+                                '<select id="formTareaScript" required style="flex:1"><option value="">Cargando…</option></select>' +
+                                '<button class="btn btn-ghost btn-icon" type="button" id="formTareaScriptReload" title="Re-escanear cloud/jobs/"><i class="fa-solid fa-rotate"></i></button>' +
+                            '</div>' +
+                            '<div class="field-error" data-err="Script"></div>' +
+                        '</div>' +
+                        '<div class="form-row">' +
+                            '<div class="form-group"><label for="formTareaCron">Expresión cron</label>' +
+                                '<div style="display:flex;gap:6px">' +
+                                    '<input id="formTareaCron" type="text" style="font-family:monospace;flex:1" placeholder="*/5 * * * *" required>' +
+                                    '<button class="btn btn-ghost btn-icon" type="button" id="formTareaCronBuilder" title="Abrir constructor"><i class="fa-solid fa-sliders"></i></button>' +
+                                '</div>' +
+                                '<div class="field-error" data-err="Cron"></div>' +
+                            '</div>' +
+                            '<div class="form-group"><label for="formTareaTimeout">Timeout (segundos)</label>' +
+                                '<input id="formTareaTimeout" type="number" min="5" max="86400" value="300">' +
+                            '</div>' +
+                        '</div>' +
+                        '<div class="form-row form-row-3">' +
+                            '<div class="form-group"><label for="formTareaOverlap">Si ya está corriendo</label>' +
+                                '<select id="formTareaOverlap">' +
+                                    '<option value="skip" selected>Saltar</option>' +
+                                    '<option value="allow">Ejecutar</option>' +
+                                '</select>' +
+                            '</div>' +
+                            '<div class="form-group"><label for="formTareaRetencion">Retención de logs (días)</label>' +
+                                '<input id="formTareaRetencion" type="number" min="1" max="3650" value="7">' +
+                            '</div>' +
+                            '<div class="form-group"><label for="formTareaActivo">Estado</label>' +
+                                '<select id="formTareaActivo">' +
+                                    '<option value="1" selected>Activa</option>' +
+                                    '<option value="0">Inactiva</option>' +
+                                '</select>' +
+                            '</div>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="modal-footer">' +
+                        '<button type="button" class="btn btn-ghost" data-act="close">Cancelar</button>' +
+                        '<button type="submit" class="btn btn-primary" id="formTareaBtnGuardar">Guardar</button>' +
+                    '</div>' +
+                '</form>' +
+            '</div>' +
+        '</div>';
+    }
+
+    function modalTareasEjecucionesHtml() {
+        return '<div class="modal-backdrop" id="ejecucionesBackdrop">' +
+            '<div class="modal" style="max-width:1000px;display:flex;flex-direction:column;max-height:90vh;overflow:hidden">' +
+                '<div class="modal-header" style="flex-shrink:0">' +
+                    '<div class="modal-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+                        '<span style="font-size:1.2rem">📜</span>' +
+                        '<span>Ejecuciones de <span id="ejecucionesTareaNombre">—</span></span>' +
+                    '</div>' +
+                    '<button class="btn-icon-sm" type="button" data-act="close" aria-label="Cerrar">&times;</button>' +
+                '</div>' +
+                '<div class="modal-body" style="gap:12px;flex:1;overflow:hidden;min-height:0;display:flex;flex-direction:column">' +
+                    '<div class="toolbar" style="margin-bottom:0">' +
+                        '<div class="toolbar-left" style="gap:8px;flex-wrap:wrap">' +
+                            '<div id="ejecucionesEstadoChips" style="display:flex;gap:6px;flex-wrap:wrap">' +
+                                '<button type="button" class="filter-chip active" data-val="">Todas</button>' +
+                                '<button type="button" class="filter-chip" data-val="corriendo">Corriendo</button>' +
+                                '<button type="button" class="filter-chip" data-val="ok">OK</button>' +
+                                '<button type="button" class="filter-chip" data-val="error">Error</button>' +
+                                '<button type="button" class="filter-chip" data-val="timeout">Timeout</button>' +
+                                '<button type="button" class="filter-chip" data-val="killed">Killed</button>' +
+                            '</div>' +
+                            '<button class="btn btn-ghost btn-icon" type="button" id="ejecucionesBtnRefrescar" title="Refrescar"><i class="fa-solid fa-rotate"></i></button>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="table-card" style="flex:1;overflow-y:auto;min-height:0">' +
+                        '<table>' +
+                            '<thead style="position:sticky;top:0;background:var(--bg);z-index:1"><tr>' +
+                                '<th style="width:70px">Código</th>' +
+                                '<th style="width:160px">Inicio</th>' +
+                                '<th style="width:100px">Duración</th>' +
+                                '<th style="width:110px">Estado</th>' +
+                                '<th style="width:110px">Disparo</th>' +
+                                '<th>Mensaje</th>' +
+                                '<th style="width:70px;text-align:center">Acciones</th>' +
+                            '</tr></thead>' +
+                            '<tbody id="ejecucionesTbody">' +
+                                '<tr><td colspan="7" style="text-align:center;padding:20px"><div class="spin"></div></td></tr>' +
+                            '</tbody>' +
+                        '</table>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="modal-footer" style="flex-shrink:0">' +
+                    '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+                '</div>' +
+            '</div>' +
+        '</div>';
+    }
+
+    function modalTareasTerminalHtml() {
+        return '<div class="modal-backdrop" id="terminalBackdrop">' +
+            '<div class="modal" style="max-width:960px">' +
+                '<div class="modal-header">' +
+                    '<div class="modal-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+                        '<span style="font-size:1.2rem">🖥️</span>' +
+                        '<span>Log ejecución #<span id="terminalEjecucionId">—</span></span>' +
+                        '<span class="badge badge-info" id="terminalEstadoBadge">corriendo</span>' +
+                    '</div>' +
+                    '<button class="btn-icon-sm" type="button" data-act="close" aria-label="Cerrar">&times;</button>' +
+                '</div>' +
+                '<div class="modal-body">' +
+                    '<pre id="terminalOutput" class="terminal-live"></pre>' +
+                '</div>' +
+                '<div class="modal-footer">' +
+                    '<button type="button" class="btn btn-ghost btn-icon active" id="btnTerminalAutoscroll" title="Auto-scroll" style="margin-right:auto">' +
+                        '<i class="fa-solid fa-angles-down"></i>' +
+                    '</button>' +
+                    '<button type="button" class="btn btn-danger" id="btnTerminalDetener" style="display:none">' +
+                        '<i class="fa-solid fa-stop"></i> Detener' +
+                    '</button>' +
+                    '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+                '</div>' +
+            '</div>' +
+        '</div>';
+    }
+
+    function modalCronBuilderHtml() {
+        var filas = CRON_CAMPOS.map(function (c) {
+            var m = CRON_CAMPO_LABEL[c];
+            return '<div class="form-group" style="display:grid;grid-template-columns:180px 130px 1fr 40px;gap:8px;align-items:center">' +
+                '<label style="margin:0">' + m.emoji + ' ' + m.label + ' <span style="color:var(--muted);font-weight:400">' + m.rango + '</span></label>' +
+                '<select data-cron-modo="' + c + '">' +
+                    '<option value="star" selected>Cualquiera</option>' +
+                    '<option value="exact">Exacto</option>' +
+                    '<option value="step">Cada</option>' +
+                    '<option value="range">Rango</option>' +
+                    '<option value="list">Lista</option>' +
+                '</select>' +
+                '<input type="text" data-cron-valor="' + c + '" disabled placeholder="—" style="font-family:monospace">' +
+                '<button type="button" class="btn btn-ghost btn-icon" data-cron-picker="' + c + '" disabled title="Elegir con botones"><i class="fa-solid fa-list-check"></i></button>' +
+            '</div>';
+        }).join('');
+
+        return '<div class="modal-backdrop" id="cronBuilderBackdrop" style="z-index:160">' +
+            '<div class="modal" style="max-width:640px">' +
+                '<div class="modal-header">' +
+                    '<div class="modal-title">' +
+                        '<span style="font-size:1.2rem">🛠️</span>' +
+                        '<span>Constructor de cron</span>' +
+                    '</div>' +
+                    '<button class="btn-icon-sm" type="button" data-act="close" aria-label="Cerrar">&times;</button>' +
+                '</div>' +
+                '<div class="modal-body">' +
+                    filas +
+                    '<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;margin-top:8px">' +
+                        '<div id="cronBuilderExpr" style="font-family:monospace;font-weight:700;font-size:1.05rem;color:var(--text)">* * * * *</div>' +
+                        '<div id="cronBuilderDesc" style="font-size:.85rem;color:var(--muted);margin-top:4px">Cada minuto, todos los días.</div>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="modal-footer">' +
+                    '<button type="button" class="btn btn-ghost" data-act="close">Cancelar</button>' +
+                    '<button type="button" class="btn btn-primary" id="cronBuilderBtnAplicar">Aplicar</button>' +
+                '</div>' +
+            '</div>' +
+        '</div>';
+    }
+
+    function modalCronPickerHtml() {
+        return '<div class="modal-backdrop" id="cronPickerBackdrop" style="z-index:180">' +
+            '<div class="modal" style="max-width:640px">' +
+                '<div class="modal-header">' +
+                    '<div class="modal-title">' +
+                        '<span id="cronPickerEmoji" style="font-size:1.2rem">⏱️</span>' +
+                        '<span id="cronPickerTitulo">Elegir</span>' +
+                    '</div>' +
+                    '<button class="btn-icon-sm" type="button" data-act="close" aria-label="Cerrar">&times;</button>' +
+                '</div>' +
+                '<div class="modal-body">' +
+                    '<div id="cronPickerHint" style="font-size:.85rem;color:var(--muted)">—</div>' +
+                    '<div id="cronPickerGrupo1" style="display:flex;gap:6px;flex-wrap:wrap"></div>' +
+                    '<div id="cronPickerGrupo2Wrap" style="display:none">' +
+                        '<div style="font-size:.85rem;color:var(--muted);margin-bottom:6px">Hasta</div>' +
+                        '<div id="cronPickerGrupo2" style="display:flex;gap:6px;flex-wrap:wrap"></div>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="modal-footer">' +
+                    '<button type="button" class="btn btn-ghost" id="cronPickerBtnLimpiar" style="margin-right:auto">Limpiar</button>' +
+                    '<button type="button" class="btn btn-ghost" data-act="close">Cancelar</button>' +
+                    '<button type="button" class="btn btn-primary" id="cronPickerBtnAplicar">Aplicar</button>' +
+                '</div>' +
+            '</div>' +
+        '</div>';
+    }
+
+    function ctxMenuTareasHtml() {
+        return '<div id="tareasCtxMenu" class="ctx-menu" role="menu">' +
+            '<button type="button" data-action="ver-ejecuciones" role="menuitem"><i class="fa-solid fa-list"></i><span>Ver ejecuciones</span></button>' +
+            '<button type="button" data-action="ejecutar-ahora" role="menuitem"><i class="fa-solid fa-play"></i><span>Ejecutar ahora</span></button>' +
+            '<button type="button" data-action="toggle-activo" role="menuitem"><i class="fa-solid fa-power-off"></i><span data-label>Desactivar</span></button>' +
+            '<div class="ctx-menu-sep"></div>' +
+            '<button type="button" data-action="editar" role="menuitem"><i class="fa-solid fa-pen"></i><span>Editar</span></button>' +
+            '<button type="button" data-action="eliminar" class="ctx-menu-danger" role="menuitem"><i class="fa-solid fa-trash"></i><span>Eliminar</span></button>' +
+        '</div>';
+    }
+
+    function ctxMenuEjecucionesHtml() {
+        return '<div id="ejecucionesCtxMenu" class="ctx-menu" role="menu">' +
+            '<button type="button" data-action="ver-log" role="menuitem"><i class="fa-solid fa-terminal"></i><span>Ver log</span></button>' +
+            '<button type="button" data-action="detener" class="ctx-menu-danger" role="menuitem"><i class="fa-solid fa-stop"></i><span>Detener</span></button>' +
+        '</div>';
+    }
+
+    function confirmTareasHtml() {
+        return '<div class="confirm-backdrop" id="tareasConfirm"><div class="confirm-box">' +
+            '<div class="confirm-title" id="tareasConfirmTitle">Confirmar</div>' +
+            '<div class="confirm-msg" id="tareasConfirmMsg">¿Continuar?</div>' +
+            '<div class="confirm-actions">' +
+                '<button class="btn btn-ghost" type="button" data-act="cancel">Cancelar</button>' +
+                '<button class="btn btn-danger" id="tareasConfirmBtn" type="button">Eliminar</button>' +
+            '</div>' +
+        '</div></div>';
+    }
+
+    // ---- Helpers de estado/duración ----
+
+    function tareaBadgeEstado(estado) {
+        if (!estado) return '<span class="badge" style="background:rgba(156,160,164,.18);color:var(--muted)">sin corrida</span>';
+        var map = {
+            ok:        { cls: 'badge-success', txt: 'OK' },
+            error:     { cls: 'badge-danger',  txt: 'Error' },
+            timeout:   { cls: 'badge-warn',    txt: 'Timeout' },
+            killed:    { cls: 'badge-danger',  txt: 'Killed' },
+            corriendo: { cls: 'badge-info',    txt: 'Corriendo' }
+        };
+        var m = map[estado] || { cls: '', txt: estado };
+        return '<span class="badge ' + m.cls + '">' + m.txt + '</span>';
+    }
+
+    function formatoDuracion(inicio, fin) {
+        if (!inicio) return '—';
+        var t0 = new Date(inicio).getTime();
+        var t1 = fin ? new Date(fin).getTime() : Date.now();
+        if (isNaN(t0) || isNaN(t1)) return '—';
+        var s = Math.max(0, Math.floor((t1 - t0) / 1000));
+        if (s < 60)    return s + 's';
+        var m = Math.floor(s / 60);
+        var rs = s % 60;
+        if (m < 60)    return m + 'm ' + rs + 's';
+        var h = Math.floor(m / 60);
+        var rm = m % 60;
+        return h + 'h ' + rm + 'm';
+    }
+
+    // ---- Confirm ----
+
+    function tareasConfirmar(opts) {
+        opts = opts || {};
+        return new Promise(function (resolve) {
+            var box = document.getElementById('tareasConfirm');
+            var titleEl = document.getElementById('tareasConfirmTitle');
+            var msgEl   = document.getElementById('tareasConfirmMsg');
+            var btnOk   = document.getElementById('tareasConfirmBtn');
+            if (!box || !titleEl || !msgEl || !btnOk) { resolve(false); return; }
+            titleEl.textContent = opts.title       || 'Confirmar';
+            msgEl.textContent   = opts.message     || '¿Continuar?';
+            btnOk.textContent   = opts.confirmText || 'Eliminar';
+            btnOk.classList.remove('btn-primary', 'btn-danger');
+            btnOk.classList.add(opts.danger === false ? 'btn-primary' : 'btn-danger');
+            _tareasConfirmResolve = function (v) {
+                box.classList.remove('open');
+                _tareasConfirmResolve = null;
+                resolve(v);
+            };
+            box.classList.add('open');
+        });
+    }
+
+    // ---- Listado de tareas ----
+
+    function abrirTareas() {
+        var bd = document.getElementById('tareasBackdrop');
+        if (!bd) return;
+        tareasFiltroQ      = '';
+        tareasFiltroActivo = '1';
+        var s = document.getElementById('tareasSearch');
+        if (s) s.value = '';
+        var sc = document.getElementById('tareasSearchClear');
+        if (sc) sc.style.display = 'none';
+        bd.classList.add('open');
+        cargarTareas();
+    }
+
+    function cerrarTareas() {
+        var bd = document.getElementById('tareasBackdrop');
+        if (bd) bd.classList.remove('open');
+    }
+
+    function tareasOnSearch(v) {
+        tareasFiltroQ = v || '';
+        var sc = document.getElementById('tareasSearchClear');
+        if (sc) sc.style.display = tareasFiltroQ ? '' : 'none';
+        if (_tareasSearchTimer) clearTimeout(_tareasSearchTimer);
+        _tareasSearchTimer = setTimeout(cargarTareas, 250);
+    }
+
+    function tareasLimpiarBusqueda() {
+        var i = document.getElementById('tareasSearch');
+        if (i) i.value = '';
+        tareasFiltroQ = '';
+        var sc = document.getElementById('tareasSearchClear');
+        if (sc) sc.style.display = 'none';
+        cargarTareas();
+    }
+
+    function tareasSetActivo(chip, v) {
+        tareasFiltroActivo = v || '';
+        var chips = document.querySelectorAll('#tareasEstadoChips .filter-chip');
+        for (var i = 0; i < chips.length; i++) chips[i].classList.toggle('active', chips[i] === chip);
+        cargarTareas();
+    }
+
+    async function cargarTareas() {
+        var tbody = document.getElementById('tareasTbody');
+        if (!tbody) return;
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:20px"><div class="spin"></div></td></tr>';
+        var qs = new URLSearchParams();
+        if (tareasFiltroQ)      qs.set('q', tareasFiltroQ);
+        if (tareasFiltroActivo !== '') qs.set('activo', tareasFiltroActivo);
+        qs.set('orden', 'id');
+        qs.set('dir', 'desc');
+        qs.set('limite', '500');
+        try {
+            var data = await api('/api/tareas.php?' + qs.toString());
+            tareasCache = data.items || [];
+            var resumen = document.getElementById('tareasResumen');
+            if (resumen && data.stats) {
+                var s = data.stats;
+                resumen.textContent = s.total + ' · ' + s.activas + ' activas · ' +
+                    (s.corriendo || 0) + ' corriendo · ' + (s.errores || 0) + ' con error';
+            }
+            renderTareas(tareasCache);
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="7" class="table-empty">✗ ' + e(err.message) + '</td></tr>';
+        }
+    }
+
+    function renderTareas(rows) {
+        var tbody = document.getElementById('tareasTbody');
+        if (!tbody) return;
+        if (!rows || rows.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" class="table-empty">Sin tareas para mostrar.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = rows.map(function (t) {
+            var estado = tareaBadgeEstado(t.ultimo_estado);
+            var run    = t.ultimo_run ? '<span style="font-family:monospace;font-size:.82rem">' + e(t.ultimo_run) + '</span>' :
+                                        '<span style="color:var(--muted)">—</span>';
+            var toggle = '<label class="toggle-switch" onclick="event.stopPropagation()" style="justify-content:center">' +
+                            '<input type="checkbox" data-toggle-activo="' + t.id + '"' + (t.activo ? ' checked' : '') + '>' +
+                            '<span class="toggle-track"><span class="toggle-thumb"></span></span>' +
+                         '</label>';
+            return '<tr class="row-clickable" data-id="' + t.id + '" style="cursor:pointer">' +
+                '<td class="td-id">#' + t.id + '</td>' +
+                '<td>' +
+                    '<div style="font-weight:600">' + e(t.nombre) + '</div>' +
+                    '<div style="font-family:monospace;color:var(--muted);font-size:.78rem">' + e(t.script) + '</div>' +
+                '</td>' +
+                '<td style="font-family:monospace;font-size:.82rem">' + e(t.cron_expr) + '</td>' +
+                '<td>' + estado + '</td>' +
+                '<td>' + run + '</td>' +
+                '<td style="text-align:center">' + toggle + '</td>' +
+                '<td style="text-align:center">' +
+                    '<button class="btn-icon-sm" data-menu-tarea="' + t.id + '" onclick="event.stopPropagation()" title="Acciones">' +
+                        '<i class="fa-solid fa-bars"></i></button>' +
+                '</td>' +
+            '</tr>';
+        }).join('');
+    }
+
+    // ---- Form Alta/Edición ----
+
+    function tareasLimpiarErroresForm() {
+        var errs = document.querySelectorAll('#formTareaBackdrop .field-error');
+        for (var i = 0; i < errs.length; i++) { errs[i].textContent = ''; errs[i].style.display = 'none'; }
+        var invs = document.querySelectorAll('#formTareaBackdrop .input-invalid');
+        for (var j = 0; j < invs.length; j++) invs[j].classList.remove('input-invalid');
+    }
+
+    function tareasMostrarErrorForm(campo, msg) {
+        var err = document.querySelector('#formTareaBackdrop .field-error[data-err="' + campo + '"]');
+        if (err) { err.textContent = msg; err.style.display = ''; }
+        var map = { Nombre: 'formTareaNombre', Script: 'formTareaScript', Cron: 'formTareaCron' };
+        var el = document.getElementById(map[campo]);
+        if (el) el.classList.add('input-invalid');
+    }
+
+    async function cargarScriptsDisponibles(actualScript) {
+        var sel = document.getElementById('formTareaScript');
+        if (!sel) return;
+        sel.innerHTML = '<option value="">Cargando…</option>';
+        try {
+            var data  = await api('/api/tareas_scripts_disponibles.php');
+            var items = data.items || [];
+            var html  = '<option value="">— elegí un script —</option>';
+            var incluye = false;
+            for (var i = 0; i < items.length; i++) {
+                html += '<option value="' + e(items[i]) + '"' +
+                        (items[i] === actualScript ? ' selected' : '') + '>' + e(items[i]) + '</option>';
+                if (items[i] === actualScript) incluye = true;
+            }
+            if (actualScript && !incluye) {
+                html += '<option value="' + e(actualScript) + '" selected>' + e(actualScript) +
+                        ' ⚠️ (no está en cloud/jobs/)</option>';
+            }
+            sel.innerHTML = html;
+        } catch (err) {
+            sel.innerHTML = '<option value="">Error al listar scripts.</option>';
+            toast(err.message || 'Error al listar scripts.', { error: true });
+        }
+    }
+
+    function abrirNuevaTarea() {
+        _tareasEditandoId = 0;
+        tareasLimpiarErroresForm();
+        document.getElementById('formTareaTitulo').textContent = 'Nueva tarea';
+        document.getElementById('formTareaSub').textContent    = '';
+        document.getElementById('formTareaId').value          = '';
+        document.getElementById('formTareaNombre').value       = '';
+        document.getElementById('formTareaDescripcion').value  = '';
+        document.getElementById('formTareaCron').value         = '* * * * *';
+        document.getElementById('formTareaTimeout').value      = '300';
+        document.getElementById('formTareaRetencion').value    = '7';
+        document.getElementById('formTareaOverlap').value      = 'skip';
+        document.getElementById('formTareaActivo').value       = '1';
+        cargarScriptsDisponibles('');
+        var bd = document.getElementById('formTareaBackdrop');
+        if (bd) bd.classList.add('open');
+        setTimeout(function () { var n = document.getElementById('formTareaNombre'); if (n) n.focus(); }, 60);
+    }
+
+    function abrirEditarTarea(id) {
+        var t = tareasCache.find(function (x) { return x.id === id; });
+        if (!t) return;
+        _tareasEditandoId = id;
+        tareasLimpiarErroresForm();
+        document.getElementById('formTareaTitulo').textContent = 'Editar tarea';
+        document.getElementById('formTareaSub').textContent    = '#' + t.id + ' · ' + t.nombre;
+        document.getElementById('formTareaId').value           = t.id;
+        document.getElementById('formTareaNombre').value       = t.nombre || '';
+        document.getElementById('formTareaDescripcion').value  = t.descripcion || '';
+        document.getElementById('formTareaCron').value         = t.cron_expr || '';
+        document.getElementById('formTareaTimeout').value      = t.timeout_seg || 300;
+        document.getElementById('formTareaRetencion').value    = t.retencion_dias || 7;
+        document.getElementById('formTareaOverlap').value      = t.overlap || 'skip';
+        document.getElementById('formTareaActivo').value       = t.activo ? '1' : '0';
+        cargarScriptsDisponibles(t.script || '');
+        var bd = document.getElementById('formTareaBackdrop');
+        if (bd) bd.classList.add('open');
+    }
+
+    async function guardarTarea(ev) {
+        if (ev && ev.preventDefault) ev.preventDefault();
+        tareasLimpiarErroresForm();
+        var id       = parseInt(document.getElementById('formTareaId').value, 10) || 0;
+        var nombre   = document.getElementById('formTareaNombre').value.trim();
+        var descripcion = document.getElementById('formTareaDescripcion').value.trim();
+        var script   = document.getElementById('formTareaScript').value;
+        var cron     = document.getElementById('formTareaCron').value.trim();
+        var timeout  = parseInt(document.getElementById('formTareaTimeout').value, 10) || 300;
+        var retencion = parseInt(document.getElementById('formTareaRetencion').value, 10) || 7;
+        var overlap  = document.getElementById('formTareaOverlap').value;
+        var activo   = document.getElementById('formTareaActivo').value === '1' ? 1 : 0;
+
+        if (!nombre) { tareasMostrarErrorForm('Nombre', 'El nombre es obligatorio.'); return; }
+        if (!script) { tareasMostrarErrorForm('Script', 'Elegí un script del desplegable.'); return; }
+        if (!cron)   { tareasMostrarErrorForm('Cron', 'La expresión cron es obligatoria.'); return; }
+        if (cron.split(/\s+/).length !== 5) {
+            tareasMostrarErrorForm('Cron', 'Deben ser exactamente 5 campos, ej: */5 * * * *.'); return;
+        }
+
+        var body = {
+            nombre: nombre, descripcion: descripcion, script: script,
+            cron_expr: cron, timeout_seg: timeout, retencion_dias: retencion,
+            overlap: overlap, activo: activo
+        };
+        var btn = document.getElementById('formTareaBtnGuardar');
+        if (btn) btn.disabled = true;
+        try {
+            if (id > 0) {
+                body.id = id;
+                await api('/api/tareas.php', { method: 'PUT', body: body });
+                toast('Tarea actualizada.');
+            } else {
+                await api('/api/tareas.php', { method: 'POST', body: body });
+                toast('Tarea creada.');
+            }
+            document.getElementById('formTareaBackdrop').classList.remove('open');
+            await cargarTareas();
+        } catch (err) {
+            var msg = err.message || 'Error al guardar.';
+            if (msg === 'nombre_duplicado' || msg.indexOf('nombre_duplicado') !== -1) {
+                tareasMostrarErrorForm('Nombre', 'Ya existe una tarea con ese nombre.');
+            } else {
+                toast(msg, { error: true, duration: 6000 });
+            }
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    async function eliminarTarea(id) {
+        var t = tareasCache.find(function (x) { return x.id === id; });
+        if (!t) return;
+        var ok = await tareasConfirmar({
+            title:   'Eliminar tarea',
+            message: 'Vas a borrar «' + t.nombre + '» junto con TODO su historial de ejecuciones y los archivos .log en disco. ¿Continuar?',
+            confirmText: 'Eliminar',
+            danger:  true
+        });
+        if (!ok) return;
+        try {
+            var d = await api('/api/tareas.php?id=' + id, { method: 'DELETE' });
+            toast('Tarea eliminada (' + (d.archivos_borrados || 0) + ' log(s) borrados).');
+            await cargarTareas();
+        } catch (err) {
+            var msg = err.message || 'Error al eliminar.';
+            if (msg === 'ejecucion_en_curso' || msg.indexOf('ejecucion_en_curso') !== -1) {
+                toast('La tarea tiene una ejecución en curso. Detenela primero.', { error: true, duration: 6000 });
+            } else {
+                toast(msg, { error: true });
+            }
+        }
+    }
+
+    async function toggleActivoTarea(id, activo) {
+        var t = tareasCache.find(function (x) { return x.id === id; });
+        if (!t) return;
+        var body = {
+            id: id,
+            nombre: t.nombre, descripcion: t.descripcion, script: t.script,
+            cron_expr: t.cron_expr, timeout_seg: t.timeout_seg,
+            retencion_dias: t.retencion_dias, overlap: t.overlap,
+            activo: activo ? 1 : 0
+        };
+        try {
+            await api('/api/tareas.php', { method: 'PUT', body: body });
+            t.activo = activo ? 1 : 0;
+            toast(activo ? 'Tarea activada.' : 'Tarea desactivada.');
+        } catch (err) {
+            toast(err.message || 'Error al cambiar estado.', { error: true });
+            await cargarTareas();
+        }
+    }
+
+    async function ejecutarAhora(id) {
+        var t = tareasCache.find(function (x) { return x.id === id; });
+        if (!t) return;
+        try {
+            var d = await api('/api/tareas_ejecutar.php', { method: 'POST', body: { tarea_id: id } });
+            toast('Ejecución #' + d.ejecucion_id + ' iniciada.');
+            cargarTareas();
+            abrirTerminal(d.ejecucion_id);
+        } catch (err) {
+            var msg = err.message || 'Error al ejecutar.';
+            if (msg === 'ya_esta_corriendo' || msg.indexOf('ya_esta_corriendo') !== -1) {
+                toast('La tarea ya está corriendo (overlap=skip).', { error: true, duration: 6000 });
+            } else {
+                toast(msg, { error: true });
+            }
+        }
+    }
+
+    // ---- Ctx-menu tareas ----
+
+    function abrirMenuContextoTareas(ev, id) {
+        var m = document.getElementById('tareasCtxMenu');
+        if (!m) return;
+        tareasCtxRegistroId = id;
+        var t = tareasCache.find(function (x) { return x.id === id; });
+        var lbl = m.querySelector('[data-action="toggle-activo"] [data-label]');
+        if (lbl) lbl.textContent = (t && t.activo) ? 'Desactivar' : 'Activar';
+        var x = ev.clientX, y = ev.clientY;
+        m.style.left = x + 'px';
+        m.style.top  = y + 'px';
+        m.classList.add('open');
+        setTimeout(function () {
+            var r = m.getBoundingClientRect();
+            if (r.right > window.innerWidth)  m.style.left = (window.innerWidth  - r.width  - 8) + 'px';
+            if (r.bottom > window.innerHeight) m.style.top  = (window.innerHeight - r.height - 8) + 'px';
+        }, 0);
+    }
+
+    function cerrarMenuContextoTareas() {
+        var m = document.getElementById('tareasCtxMenu');
+        if (m) m.classList.remove('open');
+        tareasCtxRegistroId = null;
+    }
+
+    // ---- Ejecuciones ----
+
+    function abrirEjecuciones(tareaId) {
+        var t = tareasCache.find(function (x) { return x.id === tareaId; });
+        if (!t) return;
+        ejecucionesTareaSel = { id: t.id, nombre: t.nombre };
+        ejecucionesFiltroEstado = '';
+        var n = document.getElementById('ejecucionesTareaNombre');
+        if (n) n.textContent = t.nombre;
+        var chips = document.querySelectorAll('#ejecucionesEstadoChips .filter-chip');
+        for (var i = 0; i < chips.length; i++) chips[i].classList.toggle('active', chips[i].getAttribute('data-val') === '');
+        var bd = document.getElementById('ejecucionesBackdrop');
+        if (bd) bd.classList.add('open');
+        cargarEjecuciones();
+    }
+
+    function cerrarEjecuciones() {
+        var bd = document.getElementById('ejecucionesBackdrop');
+        if (bd) bd.classList.remove('open');
+        ejecucionesTareaSel = null;
+        cargarTareas();
+    }
+
+    function ejecucionesSetEstado(chip, v) {
+        ejecucionesFiltroEstado = v || '';
+        var chips = document.querySelectorAll('#ejecucionesEstadoChips .filter-chip');
+        for (var i = 0; i < chips.length; i++) chips[i].classList.toggle('active', chips[i] === chip);
+        cargarEjecuciones();
+    }
+
+    async function cargarEjecuciones() {
+        if (!ejecucionesTareaSel) return;
+        var tbody = document.getElementById('ejecucionesTbody');
+        if (!tbody) return;
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:20px"><div class="spin"></div></td></tr>';
+        var qs = new URLSearchParams();
+        qs.set('tarea_id', String(ejecucionesTareaSel.id));
+        if (ejecucionesFiltroEstado) qs.set('estado', ejecucionesFiltroEstado);
+        qs.set('limite', '200');
+        try {
+            var data = await api('/api/tareas_ejecuciones.php?' + qs.toString());
+            ejecucionesCache = data.items || [];
+            renderEjecuciones(ejecucionesCache);
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="7" class="table-empty">✗ ' + e(err.message) + '</td></tr>';
+        }
+    }
+
+    function renderEjecuciones(rows) {
+        var tbody = document.getElementById('ejecucionesTbody');
+        if (!tbody) return;
+        if (!rows || rows.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" class="table-empty">Sin ejecuciones para mostrar.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = rows.map(function (r) {
+            var estado = tareaBadgeEstado(r.estado);
+            var msg = r.mensaje ? e(r.mensaje) : '<span style="color:var(--muted)">—</span>';
+            return '<tr class="row-clickable" data-eid="' + r.id + '" style="cursor:pointer">' +
+                '<td class="td-id">#' + r.id + '</td>' +
+                '<td style="font-family:monospace;font-size:.82rem">' + e(r.inicio || '—') + '</td>' +
+                '<td>' + formatoDuracion(r.inicio, r.fin) + '</td>' +
+                '<td>' + estado + '</td>' +
+                '<td style="font-size:.82rem;color:var(--muted)">' + e(r.disparo || '—') + '</td>' +
+                '<td style="color:var(--muted);max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + e(r.mensaje || '') + '">' + msg + '</td>' +
+                '<td style="text-align:center">' +
+                    '<button class="btn-icon-sm" data-menu-ejecucion="' + r.id + '" onclick="event.stopPropagation()" title="Acciones">' +
+                        '<i class="fa-solid fa-bars"></i></button>' +
+                '</td>' +
+            '</tr>';
+        }).join('');
+    }
+
+    function abrirMenuContextoEjecuciones(ev, id) {
+        var m = document.getElementById('ejecucionesCtxMenu');
+        if (!m) return;
+        ejecucionesCtxRegistroId = id;
+        var r = ejecucionesCache.find(function (x) { return x.id === id; });
+        var btnDet = m.querySelector('[data-action="detener"]');
+        if (btnDet) btnDet.style.display = (r && r.estado === 'corriendo') ? '' : 'none';
+        var x = ev.clientX, y = ev.clientY;
+        m.style.left = x + 'px';
+        m.style.top  = y + 'px';
+        m.classList.add('open');
+        setTimeout(function () {
+            var rr = m.getBoundingClientRect();
+            if (rr.right  > window.innerWidth)  m.style.left = (window.innerWidth  - rr.width  - 8) + 'px';
+            if (rr.bottom > window.innerHeight) m.style.top  = (window.innerHeight - rr.height - 8) + 'px';
+        }, 0);
+    }
+
+    function cerrarMenuContextoEjecuciones() {
+        var m = document.getElementById('ejecucionesCtxMenu');
+        if (m) m.classList.remove('open');
+        ejecucionesCtxRegistroId = null;
+    }
+
+    async function detenerEjecucion(id) {
+        var ok = await tareasConfirmar({
+            title:   'Detener ejecución',
+            message: 'Vas a detener la ejecución #' + id + '. El proceso recibirá SIGTERM y luego SIGKILL si no muere. ¿Continuar?',
+            confirmText: 'Detener',
+            danger:  true
+        });
+        if (!ok) return;
+        try {
+            var d = await api('/api/tareas_ejecuciones.php', { method: 'POST', body: { id: id, accion: 'detener' } });
+            toast(d.killed ? 'Ejecución detenida.' : 'Ejecución marcada como killed (proceso ya no estaba vivo).');
+            cargarEjecuciones();
+            cargarTareas();
+        } catch (err) {
+            toast(err.message || 'Error al detener.', { error: true });
+        }
+    }
+
+    async function detenerEjecucionActual() {
+        if (terminalEjecucionActual) await detenerEjecucion(terminalEjecucionActual);
+    }
+
+    // ---- Terminal SSE ----
+
+    function terminalMapearEstadoBadge(estado) {
+        var el = document.getElementById('terminalEstadoBadge');
+        if (!el) return;
+        el.classList.remove('badge-info', 'badge-success', 'badge-danger', 'badge-warn');
+        var cls = 'badge-info';
+        if (estado === 'ok')        cls = 'badge-success';
+        else if (estado === 'error')  cls = 'badge-danger';
+        else if (estado === 'timeout') cls = 'badge-warn';
+        else if (estado === 'killed')  cls = 'badge-danger';
+        el.classList.add(cls);
+        el.textContent = estado || '—';
+    }
+
+    function abrirTerminal(ejecucionId) {
+        terminalEjecucionActual = ejecucionId;
+        terminalAutoscroll = true;
+        var out = document.getElementById('terminalOutput');
+        if (out) out.textContent = '';
+        var idEl = document.getElementById('terminalEjecucionId');
+        if (idEl) idEl.textContent = String(ejecucionId);
+        terminalMapearEstadoBadge('corriendo');
+        var btnDet = document.getElementById('btnTerminalDetener');
+        if (btnDet) btnDet.style.display = '';
+        var btnAs = document.getElementById('btnTerminalAutoscroll');
+        if (btnAs) btnAs.classList.add('active');
+        var bd = document.getElementById('terminalBackdrop');
+        if (bd) bd.classList.add('open');
+
+        if (terminalES) { try { terminalES.close(); } catch (_) {} terminalES = null; }
+        terminalES = new EventSource('/api/tareas_ejecucion_stream.php?id=' + ejecucionId);
+
+        terminalES.onmessage = function (ev) {
+            if (!out) return;
+            out.textContent += ev.data + '\n';
+            if (terminalAutoscroll) out.scrollTop = out.scrollHeight;
+        };
+        terminalES.addEventListener('end', function (ev) {
+            var estado = ev.data || 'finalizado';
+            terminalMapearEstadoBadge(estado);
+            if (btnDet) btnDet.style.display = 'none';
+            if (out) {
+                out.textContent += '\n── ejecución terminada (' + estado + ') ──\n';
+                if (terminalAutoscroll) out.scrollTop = out.scrollHeight;
+            }
+            try { terminalES.close(); } catch (_) {}
+            terminalES = null;
+            if (ejecucionesTareaSel && document.getElementById('ejecucionesBackdrop').classList.contains('open')) {
+                cargarEjecuciones();
+            }
+            if (document.getElementById('tareasBackdrop').classList.contains('open')) cargarTareas();
+        });
+        terminalES.onerror = function () {
+            if (terminalES) { try { terminalES.close(); } catch (_) {} terminalES = null; }
+            terminalMapearEstadoBadge('desconectado');
+            if (btnDet) btnDet.style.display = 'none';
+        };
+    }
+
+    function cerrarTerminal() {
+        if (terminalES) { try { terminalES.close(); } catch (_) {} terminalES = null; }
+        var bd = document.getElementById('terminalBackdrop');
+        if (bd) bd.classList.remove('open');
+        terminalEjecucionActual = null;
+        if (ejecucionesTareaSel && document.getElementById('ejecucionesBackdrop').classList.contains('open')) {
+            cargarEjecuciones();
+        }
+        if (document.getElementById('tareasBackdrop').classList.contains('open')) cargarTareas();
+    }
+
+    function terminalToggleAutoscroll() {
+        terminalAutoscroll = !terminalAutoscroll;
+        var b = document.getElementById('btnTerminalAutoscroll');
+        if (b) b.classList.toggle('active', terminalAutoscroll);
+        toast(terminalAutoscroll ? 'Auto-scroll ON' : 'Auto-scroll OFF');
+        if (terminalAutoscroll) {
+            var out = document.getElementById('terminalOutput');
+            if (out) out.scrollTop = out.scrollHeight;
+        }
+    }
+
+    // ---- Constructor de cron ----
+
+    function cronNombreMesCorto(n) {
+        var m = ['', 'Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+        return m[n] || String(n);
+    }
+    function cronNombreDiaCorto(n) {
+        var d = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+        return d[n] || String(n);
+    }
+    function cronNombreMes(n) {
+        var m = ['', 'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+        return m[n] || String(n);
+    }
+    function cronNombreDia(n) {
+        var d = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+        return d[n] || String(n);
+    }
+    function cronPluralDia(n) {
+        var s = cronNombreDia(n);
+        return /s$/.test(s) ? ('los ' + s) : ('los ' + s + 's');
+    }
+
+    function abrirCronBuilder() {
+        var expr = (document.getElementById('formTareaCron').value || '* * * * *').trim();
+        cronBuilderPoblar(expr);
+        var bd = document.getElementById('cronBuilderBackdrop');
+        if (bd) bd.classList.add('open');
+    }
+    function cerrarCronBuilder() {
+        var bd = document.getElementById('cronBuilderBackdrop');
+        if (bd) bd.classList.remove('open');
+    }
+    function cronBuilderPoblar(expr) {
+        var partes = (expr || '* * * * *').split(/\s+/);
+        while (partes.length < 5) partes.push('*');
+        for (var i = 0; i < 5; i++) cronBuilderPoblarCampo(CRON_CAMPOS[i], partes[i]);
+        cronBuilderOnChange();
+    }
+    function cronBuilderPoblarCampo(campo, valor) {
+        var modoSel  = document.querySelector('[data-cron-modo="' + campo + '"]');
+        var input    = document.querySelector('[data-cron-valor="' + campo + '"]');
+        var picker   = document.querySelector('[data-cron-picker="' + campo + '"]');
+        if (!modoSel || !input) return;
+        var modo = 'star', val = '';
+        if (valor === '*' || valor === '') {
+            modo = 'star';
+        } else if (valor.indexOf('/') !== -1 && valor.split('/')[0] === '*') {
+            modo = 'step'; val = valor.split('/')[1] || '';
+        } else if (valor.indexOf('-') !== -1) {
+            modo = 'range'; val = valor;
+        } else if (valor.indexOf(',') !== -1) {
+            modo = 'list'; val = valor;
+        } else {
+            modo = 'exact'; val = valor;
+        }
+        modoSel.value = modo;
+        input.value   = val;
+        input.disabled  = (modo === 'star');
+        input.placeholder = (modo === 'step') ? 'N (cada)' :
+                            (modo === 'range') ? 'N-M' :
+                            (modo === 'list') ? 'N,M,O' :
+                            (modo === 'exact') ? 'N' : '—';
+        if (picker) picker.disabled = (modo === 'star');
+    }
+    function cronBuilderModoChange(campo) {
+        var modoSel = document.querySelector('[data-cron-modo="' + campo + '"]');
+        var input   = document.querySelector('[data-cron-valor="' + campo + '"]');
+        var picker  = document.querySelector('[data-cron-picker="' + campo + '"]');
+        if (!modoSel || !input) return;
+        var modo = modoSel.value;
+        input.value = '';
+        input.disabled  = (modo === 'star');
+        input.placeholder = (modo === 'step') ? 'N (cada)' :
+                            (modo === 'range') ? 'N-M' :
+                            (modo === 'list') ? 'N,M,O' :
+                            (modo === 'exact') ? 'N' : '—';
+        if (picker) picker.disabled = (modo === 'star');
+        cronBuilderOnChange();
+        if (modo !== 'star') setTimeout(function () { abrirCronPicker(campo); }, 0);
+    }
+    function cronBuilderConstruirCampo(campo) {
+        var modoSel = document.querySelector('[data-cron-modo="' + campo + '"]');
+        var input   = document.querySelector('[data-cron-valor="' + campo + '"]');
+        if (!modoSel) return '*';
+        var modo = modoSel.value;
+        var v = (input && input.value || '').trim();
+        if (modo === 'star' || v === '') return '*';
+        if (modo === 'exact') return v;
+        if (modo === 'step')  return '*/' + v;
+        if (modo === 'range') return v;
+        if (modo === 'list')  return v;
+        return '*';
+    }
+    function cronBuilderConstruir() {
+        return CRON_CAMPOS.map(cronBuilderConstruirCampo).join(' ');
+    }
+    function cronBuilderOnChange() {
+        var expr = cronBuilderConstruir();
+        var exprEl = document.getElementById('cronBuilderExpr');
+        var descEl = document.getElementById('cronBuilderDesc');
+        if (exprEl) exprEl.textContent = expr;
+        if (descEl) descEl.textContent = cronDescribir(expr);
+    }
+    function cronBuilderAplicar() {
+        var expr = cronBuilderConstruir();
+        var input = document.getElementById('formTareaCron');
+        if (input) {
+            input.value = expr;
+            input.classList.remove('input-invalid');
+            var err = document.querySelector('#formTareaBackdrop .field-error[data-err="Cron"]');
+            if (err) { err.textContent = ''; err.style.display = 'none'; }
+        }
+        cerrarCronBuilder();
+    }
+
+    function cronDescribir(expr) {
+        var partes = (expr || '').split(/\s+/);
+        if (partes.length !== 5) return 'Expresión inválida.';
+        var m = partes[0], h = partes[1], dom = partes[2], mon = partes[3], dow = partes[4];
+
+        function horario() {
+            if (m === '*' && h === '*') return 'Cada minuto';
+            if (/^\*\/(\d+)$/.test(m) && h === '*') return 'Cada ' + m.split('/')[1] + ' minutos';
+            if (m === '0' && h === '*')  return 'Al minuto 0 de cada hora';
+            if (m === '0' && /^\*\/(\d+)$/.test(h)) return 'Cada ' + h.split('/')[1] + ' horas en punto';
+            if (/^\d+$/.test(m) && /^\d+$/.test(h)) {
+                return 'A las ' + String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+            }
+            return 'según patrón ' + m + ' ' + h;
+        }
+        function describirDow() {
+            if (dow === '*') return null;
+            if (/^\d+$/.test(dow)) return cronPluralDia(parseInt(dow, 10));
+            if (/^(\d+),(\d+)$/.test(dow)) {
+                var pp = dow.split(',').map(function (x) { return cronPluralDia(parseInt(x, 10)); });
+                return pp.slice(0, -1).join(', ') + ' y ' + pp[pp.length - 1];
+            }
+            if (/^(\d+)-(\d+)$/.test(dow)) {
+                var ab = dow.split('-'); return 'de ' + cronNombreDia(parseInt(ab[0], 10)) + ' a ' + cronNombreDia(parseInt(ab[1], 10));
+            }
+            return 'según DOW=' + dow;
+        }
+        var trozos = [horario()];
+        if (dom !== '*') trozos.push('el día ' + dom + ' del mes');
+        if (mon !== '*' && /^\d+$/.test(mon)) trozos.push('en ' + cronNombreMes(parseInt(mon, 10)));
+        else if (mon !== '*') trozos.push('en meses ' + mon);
+        var d = describirDow();
+        if (d) trozos.push(d);
+        else if (dom === '*' && mon === '*') trozos.push('todos los días');
+        var s = trozos.join(', ');
+        return s.charAt(0).toUpperCase() + s.slice(1) + '.';
+    }
+
+    // ---- Picker de valores ----
+
+    function cronPickerRango(modo, cfg) {
+        var arr = [];
+        if (modo === 'step') {
+            for (var i = 1; i <= cfg.max; i++) arr.push(i);
+            return arr;
+        }
+        if (cfg.orden) return cfg.orden.slice();
+        for (var j = cfg.min; j <= cfg.max; j++) arr.push(j);
+        return arr;
+    }
+    function cronPickerBoton(n, activo, label, grupo) {
+        return '<button type="button" class="filter-chip cron-picker-btn' + (activo ? ' active' : '') +
+               '" data-picker-val="' + n + '" data-picker-grupo="' + grupo + '">' + e(label) + '</button>';
+    }
+    function abrirCronPicker(campo) {
+        var modoSel = document.querySelector('[data-cron-modo="' + campo + '"]');
+        var input   = document.querySelector('[data-cron-valor="' + campo + '"]');
+        if (!modoSel || !input) return;
+        var modo = modoSel.value;
+        if (modo === 'star') { toast('Modo "Cualquiera" no requiere valor.'); return; }
+        var cfg = CRON_PICKER_CFG[campo];
+        cronPickerState = {
+            campo: campo, modo: modo, cfg: cfg,
+            valor1: null, valor2: null, seleccionados: []
+        };
+        cronPickerPreCargar(input.value.trim());
+        var meta = CRON_CAMPO_LABEL[campo];
+        document.getElementById('cronPickerEmoji').textContent  = meta.emoji;
+        document.getElementById('cronPickerTitulo').textContent = cfg.titulo;
+        var hint = 'Modo: ' + (modo === 'exact' ? 'Elegí un único valor.' :
+                                modo === 'step'  ? 'Elegí el paso N (cada N unidades).' :
+                                modo === 'range' ? 'Elegí Desde y Hasta.' :
+                                'Elegí uno o más valores.');
+        document.getElementById('cronPickerHint').textContent = hint;
+        document.getElementById('cronPickerGrupo2Wrap').style.display = (modo === 'range') ? '' : 'none';
+        cronPickerRender();
+        var bd = document.getElementById('cronPickerBackdrop');
+        if (bd) bd.classList.add('open');
+    }
+    function cerrarCronPicker() {
+        var bd = document.getElementById('cronPickerBackdrop');
+        if (bd) bd.classList.remove('open');
+        cronPickerState = null;
+    }
+    function cronPickerPreCargar(actual) {
+        if (!cronPickerState || !actual) return;
+        var modo = cronPickerState.modo;
+        if (modo === 'exact' || modo === 'step') {
+            var n = parseInt(actual, 10);
+            if (!isNaN(n)) cronPickerState.valor1 = n;
+        } else if (modo === 'range') {
+            var m = actual.match(/^(\d+)-(\d+)$/);
+            if (m) { cronPickerState.valor1 = parseInt(m[1], 10); cronPickerState.valor2 = parseInt(m[2], 10); }
+        } else if (modo === 'list') {
+            cronPickerState.seleccionados = actual.split(',').map(function (s) { return parseInt(s.trim(), 10); })
+                .filter(function (x) { return !isNaN(x); }).sort(function (a, b) { return a - b; });
+        }
+    }
+    function cronPickerRender() {
+        if (!cronPickerState) return;
+        var st = cronPickerState;
+        var arr = cronPickerRango(st.modo, st.cfg);
+        var g1 = document.getElementById('cronPickerGrupo1');
+        var g2 = document.getElementById('cronPickerGrupo2');
+        var esStep = (st.modo === 'step');
+        g1.innerHTML = arr.map(function (n) {
+            var label = esStep ? String(n) : st.cfg.formato(n);
+            var activo = (st.modo === 'exact' || st.modo === 'step') ? (st.valor1 === n) :
+                         (st.modo === 'range') ? (st.valor1 === n) :
+                         (st.seleccionados.indexOf(n) !== -1);
+            return cronPickerBoton(n, activo, label, 1);
+        }).join('');
+        if (st.modo === 'range') {
+            g2.innerHTML = arr.map(function (n) {
+                return cronPickerBoton(n, st.valor2 === n, st.cfg.formato(n), 2);
+            }).join('');
+        }
+    }
+    function cronPickerSeleccionar(n, grupo) {
+        var st = cronPickerState;
+        if (!st) return;
+        if (st.modo === 'exact' || st.modo === 'step') {
+            st.valor1 = (st.valor1 === n) ? null : n;
+        } else if (st.modo === 'range') {
+            if (grupo === 1) st.valor1 = (st.valor1 === n) ? null : n;
+            else             st.valor2 = (st.valor2 === n) ? null : n;
+        } else if (st.modo === 'list') {
+            var i = st.seleccionados.indexOf(n);
+            if (i !== -1) st.seleccionados.splice(i, 1);
+            else          st.seleccionados.push(n);
+            st.seleccionados.sort(function (a, b) { return a - b; });
+        }
+        cronPickerRender();
+    }
+    function cronPickerLimpiar() {
+        if (!cronPickerState) return;
+        cronPickerState.valor1 = null;
+        cronPickerState.valor2 = null;
+        cronPickerState.seleccionados = [];
+        cronPickerRender();
+    }
+    function cronPickerAplicar() {
+        var st = cronPickerState;
+        if (!st) return;
+        var v = '';
+        if (st.modo === 'exact') {
+            if (st.valor1 === null) { toast('Elegí un valor.', { error: true }); return; }
+            v = String(st.valor1);
+        } else if (st.modo === 'step') {
+            if (st.valor1 === null) { toast('Elegí el paso.', { error: true }); return; }
+            v = String(st.valor1);
+        } else if (st.modo === 'range') {
+            if (st.valor1 === null || st.valor2 === null) { toast('Elegí Desde y Hasta.', { error: true }); return; }
+            if (st.valor1 > st.valor2) { toast('Desde debe ser ≤ Hasta.', { error: true }); return; }
+            v = st.valor1 + '-' + st.valor2;
+        } else if (st.modo === 'list') {
+            if (!st.seleccionados.length) { toast('Elegí al menos un valor.', { error: true }); return; }
+            v = st.seleccionados.join(',');
+        }
+        var input = document.querySelector('[data-cron-valor="' + st.campo + '"]');
+        if (input) input.value = v;
+        cerrarCronPicker();
+        cronBuilderOnChange();
+    }
+
+    // ---- Wire principal ----
+
+    function wireTareasView() {
+        var tile = document.getElementById('cfgTileTareas');
+        if (tile) tile.addEventListener('click', abrirTareas);
+
+        // Modal listado tareas
+        var listBd = document.getElementById('tareasBackdrop');
+        if (listBd) {
+            listBd.addEventListener('click', function (ev) {
+                if (ev.target === listBd || ev.target.closest('[data-act="close"]')) cerrarTareas();
+            });
+        }
+
+        var s = document.getElementById('tareasSearch');
+        if (s) s.addEventListener('input', function () { tareasOnSearch(s.value); });
+        var sc = document.getElementById('tareasSearchClear');
+        if (sc) sc.addEventListener('click', tareasLimpiarBusqueda);
+
+        var chips = document.querySelectorAll('#tareasEstadoChips .filter-chip');
+        for (var i = 0; i < chips.length; i++) {
+            (function (chip) {
+                chip.addEventListener('click', function () { tareasSetActivo(chip, chip.getAttribute('data-val') || ''); });
+            })(chips[i]);
+        }
+        var btnRef = document.getElementById('tareasBtnRefrescar');
+        if (btnRef) btnRef.addEventListener('click', cargarTareas);
+        var btnNue = document.getElementById('tareasBtnNueva');
+        if (btnNue) btnNue.addEventListener('click', abrirNuevaTarea);
+
+        var tbody = document.getElementById('tareasTbody');
+        if (tbody) {
+            tbody.addEventListener('click', function (ev) {
+                var chk = ev.target.closest('input[data-toggle-activo]');
+                if (chk) {
+                    var idT = parseInt(chk.getAttribute('data-toggle-activo'), 10);
+                    toggleActivoTarea(idT, chk.checked);
+                    return;
+                }
+                var btn = ev.target.closest('[data-menu-tarea]');
+                if (btn) {
+                    var idM = parseInt(btn.getAttribute('data-menu-tarea'), 10);
+                    abrirMenuContextoTareas(ev, idM);
+                    return;
+                }
+                var tr = ev.target.closest('tr[data-id]');
+                if (tr) abrirEjecuciones(parseInt(tr.getAttribute('data-id'), 10));
+            });
+            tbody.addEventListener('contextmenu', function (ev) {
+                var tr = ev.target.closest('tr[data-id]');
+                if (!tr) return;
+                ev.preventDefault();
+                abrirMenuContextoTareas(ev, parseInt(tr.getAttribute('data-id'), 10));
+            });
+        }
+
+        // Ctx menu tareas
+        var ctxT = document.getElementById('tareasCtxMenu');
+        if (ctxT) {
+            ctxT.addEventListener('click', function (ev) {
+                var btn = ev.target.closest('button[data-action]');
+                if (!btn) return;
+                var act = btn.getAttribute('data-action');
+                var id  = tareasCtxRegistroId;
+                cerrarMenuContextoTareas();
+                if (!id) return;
+                if (act === 'ver-ejecuciones') abrirEjecuciones(id);
+                else if (act === 'ejecutar-ahora') ejecutarAhora(id);
+                else if (act === 'toggle-activo') {
+                    var t = tareasCache.find(function (x) { return x.id === id; });
+                    if (t) toggleActivoTarea(id, !t.activo);
+                    cargarTareas();
+                }
+                else if (act === 'editar') abrirEditarTarea(id);
+                else if (act === 'eliminar') eliminarTarea(id);
+            });
+        }
+
+        // Form
+        var formBd = document.getElementById('formTareaBackdrop');
+        if (formBd) {
+            formBd.addEventListener('click', function (ev) {
+                if (ev.target === formBd || ev.target.closest('[data-act="close"]')) formBd.classList.remove('open');
+            });
+        }
+        var form = document.getElementById('formTarea');
+        if (form) form.addEventListener('submit', guardarTarea);
+        var btnRel = document.getElementById('formTareaScriptReload');
+        if (btnRel) btnRel.addEventListener('click', function () {
+            var actual = document.getElementById('formTareaScript').value;
+            cargarScriptsDisponibles(actual);
+        });
+        var btnCron = document.getElementById('formTareaCronBuilder');
+        if (btnCron) btnCron.addEventListener('click', abrirCronBuilder);
+
+        // Ejecuciones
+        var ejBd = document.getElementById('ejecucionesBackdrop');
+        if (ejBd) {
+            ejBd.addEventListener('click', function (ev) {
+                if (ev.target === ejBd || ev.target.closest('[data-act="close"]')) cerrarEjecuciones();
+            });
+        }
+        var ejChips = document.querySelectorAll('#ejecucionesEstadoChips .filter-chip');
+        for (var j = 0; j < ejChips.length; j++) {
+            (function (chip) {
+                chip.addEventListener('click', function () { ejecucionesSetEstado(chip, chip.getAttribute('data-val') || ''); });
+            })(ejChips[j]);
+        }
+        var btnRefEj = document.getElementById('ejecucionesBtnRefrescar');
+        if (btnRefEj) btnRefEj.addEventListener('click', cargarEjecuciones);
+
+        var ejTbody = document.getElementById('ejecucionesTbody');
+        if (ejTbody) {
+            ejTbody.addEventListener('click', function (ev) {
+                var btn = ev.target.closest('[data-menu-ejecucion]');
+                if (btn) {
+                    var idM = parseInt(btn.getAttribute('data-menu-ejecucion'), 10);
+                    abrirMenuContextoEjecuciones(ev, idM);
+                    return;
+                }
+                var tr = ev.target.closest('tr[data-eid]');
+                if (tr) abrirTerminal(parseInt(tr.getAttribute('data-eid'), 10));
+            });
+            ejTbody.addEventListener('contextmenu', function (ev) {
+                var tr = ev.target.closest('tr[data-eid]');
+                if (!tr) return;
+                ev.preventDefault();
+                abrirMenuContextoEjecuciones(ev, parseInt(tr.getAttribute('data-eid'), 10));
+            });
+        }
+
+        // Ctx menu ejecuciones
+        var ctxE = document.getElementById('ejecucionesCtxMenu');
+        if (ctxE) {
+            ctxE.addEventListener('click', function (ev) {
+                var btn = ev.target.closest('button[data-action]');
+                if (!btn) return;
+                var act = btn.getAttribute('data-action');
+                var id  = ejecucionesCtxRegistroId;
+                cerrarMenuContextoEjecuciones();
+                if (!id) return;
+                if (act === 'ver-log')  abrirTerminal(id);
+                else if (act === 'detener') detenerEjecucion(id);
+            });
+        }
+
+        // Terminal
+        var termBd = document.getElementById('terminalBackdrop');
+        if (termBd) {
+            termBd.addEventListener('click', function (ev) {
+                if (ev.target === termBd || ev.target.closest('[data-act="close"]')) cerrarTerminal();
+            });
+        }
+        var btnAs  = document.getElementById('btnTerminalAutoscroll');
+        if (btnAs)  btnAs.addEventListener('click', terminalToggleAutoscroll);
+        var btnDet = document.getElementById('btnTerminalDetener');
+        if (btnDet) btnDet.addEventListener('click', detenerEjecucionActual);
+
+        // Cron builder
+        var cbBd = document.getElementById('cronBuilderBackdrop');
+        if (cbBd) {
+            cbBd.addEventListener('click', function (ev) {
+                if (ev.target === cbBd || ev.target.closest('[data-act="close"]')) cerrarCronBuilder();
+            });
+            cbBd.addEventListener('change', function (ev) {
+                var sel = ev.target.closest('[data-cron-modo]');
+                if (sel) cronBuilderModoChange(sel.getAttribute('data-cron-modo'));
+                var inp = ev.target.closest('[data-cron-valor]');
+                if (inp) cronBuilderOnChange();
+            });
+            cbBd.addEventListener('input', function (ev) {
+                var inp = ev.target.closest('[data-cron-valor]');
+                if (inp) cronBuilderOnChange();
+            });
+            cbBd.addEventListener('click', function (ev) {
+                var picker = ev.target.closest('[data-cron-picker]');
+                if (picker && !picker.disabled) {
+                    ev.preventDefault();
+                    abrirCronPicker(picker.getAttribute('data-cron-picker'));
+                    return;
+                }
+                var inp = ev.target.closest('[data-cron-valor]');
+                if (inp && !inp.disabled) {
+                    var campo = inp.getAttribute('data-cron-valor');
+                    abrirCronPicker(campo);
+                }
+            });
+        }
+        var btnApl = document.getElementById('cronBuilderBtnAplicar');
+        if (btnApl) btnApl.addEventListener('click', cronBuilderAplicar);
+
+        // Cron picker
+        var pkBd = document.getElementById('cronPickerBackdrop');
+        if (pkBd) {
+            pkBd.addEventListener('click', function (ev) {
+                if (ev.target === pkBd || ev.target.closest('[data-act="close"]')) cerrarCronPicker();
+                var b = ev.target.closest('[data-picker-val]');
+                if (b) {
+                    var n = parseInt(b.getAttribute('data-picker-val'), 10);
+                    var g = parseInt(b.getAttribute('data-picker-grupo'), 10) || 1;
+                    cronPickerSeleccionar(n, g);
+                }
+            });
+        }
+        var btnPkLim = document.getElementById('cronPickerBtnLimpiar');
+        if (btnPkLim) btnPkLim.addEventListener('click', cronPickerLimpiar);
+        var btnPkApl = document.getElementById('cronPickerBtnAplicar');
+        if (btnPkApl) btnPkApl.addEventListener('click', cronPickerAplicar);
+
+        // Confirm
+        var conf = document.getElementById('tareasConfirm');
+        if (conf) {
+            conf.addEventListener('click', function (ev) {
+                var cancel = ev.target.closest('[data-act="cancel"]');
+                if (cancel && _tareasConfirmResolve) { _tareasConfirmResolve(false); return; }
+                if (ev.target === conf && _tareasConfirmResolve) _tareasConfirmResolve(false);
+            });
+            var btnOk = document.getElementById('tareasConfirmBtn');
+            if (btnOk) btnOk.addEventListener('click', function () { if (_tareasConfirmResolve) _tareasConfirmResolve(true); });
+        }
+
+        // Cerrar ctx-menus al clickear fuera
+        if (!wireTareasView._globalBound) {
+            wireTareasView._globalBound = true;
+            document.addEventListener('click', function (ev) {
+                var ctxT2 = document.getElementById('tareasCtxMenu');
+                var ctxE2 = document.getElementById('ejecucionesCtxMenu');
+                if (ctxT2 && ctxT2.classList.contains('open') && !ctxT2.contains(ev.target)) cerrarMenuContextoTareas();
+                if (ctxE2 && ctxE2.classList.contains('open') && !ctxE2.contains(ev.target)) cerrarMenuContextoEjecuciones();
+            }, true);
+            window.addEventListener('scroll', function () {
+                cerrarMenuContextoTareas(); cerrarMenuContextoEjecuciones();
+            }, true);
+            window.addEventListener('resize', function () {
+                cerrarMenuContextoTareas(); cerrarMenuContextoEjecuciones();
+            });
+
+            document.addEventListener('keydown', function (ev) {
+                if (ev.key !== 'Escape') return;
+                var pk = document.getElementById('cronPickerBackdrop');
+                if (pk && pk.classList.contains('open')) { cerrarCronPicker(); ev.stopImmediatePropagation(); return; }
+                var cb = document.getElementById('cronBuilderBackdrop');
+                if (cb && cb.classList.contains('open')) { cerrarCronBuilder(); ev.stopImmediatePropagation(); return; }
+                var ct = document.getElementById('tareasCtxMenu');
+                if (ct && ct.classList.contains('open')) { cerrarMenuContextoTareas(); ev.stopImmediatePropagation(); return; }
+                var ce = document.getElementById('ejecucionesCtxMenu');
+                if (ce && ce.classList.contains('open')) { cerrarMenuContextoEjecuciones(); ev.stopImmediatePropagation(); return; }
+                var term = document.getElementById('terminalBackdrop');
+                if (term && term.classList.contains('open')) { cerrarTerminal(); ev.stopImmediatePropagation(); return; }
+                var fbd = document.getElementById('formTareaBackdrop');
+                if (fbd && fbd.classList.contains('open')) { fbd.classList.remove('open'); ev.stopImmediatePropagation(); return; }
+                var conf2 = document.getElementById('tareasConfirm');
+                if (conf2 && conf2.classList.contains('open')) {
+                    if (_tareasConfirmResolve) _tareasConfirmResolve(false);
+                    ev.stopImmediatePropagation();
+                    return;
+                }
+                var eb = document.getElementById('ejecucionesBackdrop');
+                if (eb && eb.classList.contains('open')) { cerrarEjecuciones(); ev.stopImmediatePropagation(); return; }
+                var tb = document.getElementById('tareasBackdrop');
+                if (tb && tb.classList.contains('open')) { cerrarTareas(); ev.stopImmediatePropagation(); return; }
+            }, true);
+        }
+    }
 
     // -------- Chrome de la app --------------------------------------------
 
