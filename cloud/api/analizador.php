@@ -50,9 +50,10 @@ $kpis['ticket_promedio_30d'] = $kpis['comprobantes_30d'] > 0
     ? round($kpis['facturado_30d'] / $kpis['comprobantes_30d'], 2)
     : 0;
 
-// Cobros mensuales: se leen de la caché `grafico_cobros` (poblada por
-// analizador_refrescar.php). Los meses históricos no cambian; el mes en curso
-// se refresca cuando el usuario presiona "Refrescar".
+// Cobros y pagos mensuales: se leen de las cachés `grafico_cobros` /
+// `grafico_pagos` (pobladas por analizador_refrescar_cobros.php y
+// analizador_refrescar_pagos.php). Los meses históricos no cambian; el
+// mes en curso se refresca cuando el usuario presiona "Refrescar".
 $cobrosPorMes = $pdo->query("
     SELECT mes,
            cantidad,
@@ -64,6 +65,19 @@ $cobrosPorMes = $pdo->query("
 
 $cobrosActualizado = $pdo->query(
     "SELECT MAX(actualizado) FROM grafico_cobros"
+)->fetchColumn();
+
+$pagosPorMes = $pdo->query("
+    SELECT mes,
+           cantidad,
+           monto AS total
+      FROM grafico_pagos
+     ORDER BY mes DESC
+     LIMIT 12
+")->fetchAll();
+
+$pagosActualizado = $pdo->query(
+    "SELECT MAX(actualizado) FROM grafico_pagos"
 )->fetchColumn();
 
 $topClientes = $pdo->query("
@@ -95,6 +109,8 @@ json_ok([
     'kpis'                    => $kpis,
     'cobros_por_mes'          => $cobrosPorMes,
     'cobros_actualizado'      => $cobrosActualizado,
+    'pagos_por_mes'           => $pagosPorMes,
+    'pagos_actualizado'       => $pagosActualizado,
     'top_clientes'            => $topClientes,
     'comprobantes_recientes'  => $recientes,
     'now'                     => date('c'),

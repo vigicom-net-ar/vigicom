@@ -2245,6 +2245,20 @@ CREATE TABLE `grafico_cobros`  (
 ) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = 'Cache mensual de cobros (recibos RX) para el Analizador' ROW_FORMAT = Dynamic;
 
 -- ----------------------------
+-- Table structure for grafico_pagos
+-- ----------------------------
+DROP TABLE IF EXISTS `grafico_pagos`;
+CREATE TABLE `grafico_pagos`  (
+  `id` int(0) NOT NULL AUTO_INCREMENT,
+  `mes` varchar(7) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+  `monto` decimal(14, 2) NOT NULL DEFAULT 0.00,
+  `cantidad` int(0) NOT NULL DEFAULT 0,
+  `actualizado` datetime(0) NOT NULL,
+  PRIMARY KEY (`id`) USING BTREE,
+  UNIQUE INDEX `uk_mes`(`mes`) USING BTREE
+) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = 'Cache mensual de pagos (movimientos < 0 en cuentas Cajas 0.1.01 / Bancos 0.1.03) para el Analizador' ROW_FORMAT = Dynamic;
+
+-- ----------------------------
 -- Table structure for grupos
 -- ----------------------------
 DROP TABLE IF EXISTS `grupos`;

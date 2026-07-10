@@ -39,6 +39,7 @@
         '/senales':      { title: 'Señales',       render: renderSenales },
         '/reportes':     { title: 'Reportes',      render: renderTodo },
         '/analizador':   { title: 'Analizador',    render: renderAnalizador },
+        '/cuentas':      { title: 'Plan de cuentas', render: renderCuentas },
         '/usuarios':     { title: 'Usuarios',      render: renderUsuarios },
         '/roles':        { title: 'Roles',         render: renderRoles },
         '/config':       { title: 'Herramientas',  render: renderConfig }
@@ -325,22 +326,71 @@
         return (meses[mi] || p[1]) + ' ' + p[0];
     }
 
-    async function renderAnalizador(view) {
-        var d = await api('/api/analizador.php');
-        var k = d.kpis || {};
-        var porMes  = d.cobros_por_mes  || [];
-        var topCli  = d.top_clientes    || [];
-        var recient = d.comprobantes_recientes || [];
-        var cobrosActualizado = d.cobros_actualizado || null;
-
-        var maxMes = porMes.reduce(function (m, r) {
+    function analizadorGraficoMensualHTML(cfg) {
+        var rows = cfg.rows || [];
+        var maxMes = rows.reduce(function (m, r) {
             var t = Number(r.total) || 0;
             return t > m ? t : m;
         }, 0);
-
-        var subtituloCobros = cobrosActualizado
-            ? 'Últimos 12 meses · Actualizado ' + timeAgo(String(cobrosActualizado).replace(' ', 'T'))
+        var subtitulo = cfg.actualizado
+            ? 'Últimos 12 meses · Actualizado ' + timeAgo(String(cfg.actualizado).replace(' ', 'T'))
             : 'Últimos 12 meses · Sin datos, presioná Refrescar';
+
+        return '<div class="table-card">' +
+                '<div class="dash-table-header">' +
+                    '<div><div>' + e(cfg.titulo) + '</div>' +
+                    '<div class="text-muted text-sm" style="font-weight:400;">' + e(subtitulo) + '</div></div>' +
+                    '<button type="button" class="btn btn-ghost btn-sm" id="' + e(cfg.btnId) + '" title="' + e(cfg.btnTitle) + '">' +
+                        '<i class="fa-solid fa-arrows-rotate"></i> Refrescar' +
+                    '</button>' +
+                '</div>' +
+                '<table><thead><tr>' +
+                    '<th>Mes</th><th>' + e(cfg.colCantidad) + '</th><th style="text-align:right">Total</th><th style="width:35%">Volumen</th>' +
+                '</tr></thead><tbody>' +
+                (rows.length === 0
+                    ? '<tr><td colspan="4" class="table-empty">Sin datos. Presioná <b>Refrescar</b> para generar la caché.</td></tr>'
+                    : rows.map(function (r) {
+                        var t   = Number(r.total) || 0;
+                        var pct = maxMes > 0 ? Math.round((t / maxMes) * 100) : 0;
+                        return '<tr>' +
+                            '<td><div class="td-nombre">' + e(fmtMes(r.mes)) + '</div></td>' +
+                            '<td class="text-muted">' + fmtInt(r.cantidad || 0) + '</td>' +
+                            '<td style="text-align:right;font-weight:600">' + fmtMoney(t) + '</td>' +
+                            '<td>' +
+                                '<div style="height:6px;background:var(--bg);border-radius:99px;overflow:hidden">' +
+                                    '<div style="height:100%;width:' + pct + '%;background:' + e(cfg.barColor) + '"></div>' +
+                                '</div>' +
+                            '</td>' +
+                        '</tr>';
+                    }).join('')) +
+                '</tbody></table>' +
+            '</div>';
+    }
+
+    function analizadorBindRefresh(btnId, endpoint, okMsg, view) {
+        var btn = document.getElementById(btnId);
+        if (!btn) return;
+        btn.addEventListener('click', async function () {
+            btn.disabled = true;
+            var label = btn.innerHTML;
+            btn.innerHTML = '<i class="fa-solid fa-arrows-rotate fa-spin"></i> Refrescando…';
+            try {
+                await api(endpoint, { method: 'POST' });
+                toast(okMsg);
+                await renderAnalizador(view);
+            } catch (err) {
+                btn.disabled = false;
+                btn.innerHTML = label;
+                toast(err.message || 'No se pudo refrescar.', true);
+            }
+        });
+    }
+
+    async function renderAnalizador(view) {
+        var d = await api('/api/analizador.php');
+        var k = d.kpis || {};
+        var topCli  = d.top_clientes    || [];
+        var recient = d.comprobantes_recientes || [];
 
         view.innerHTML =
             '<div class="page-header"><div>' +
@@ -360,36 +410,27 @@
             '</div>' +
 
             '<div class="dash-grid">' +
-                '<div class="table-card">' +
-                    '<div class="dash-table-header">' +
-                        '<div><div>Cobros por mes</div>' +
-                        '<div class="text-muted text-sm" style="font-weight:400;">' + e(subtituloCobros) + '</div></div>' +
-                        '<button type="button" class="btn btn-ghost btn-sm" id="analRefrescarCobros" title="Recalcular desde recibos (RX) emitidos">' +
-                            '<i class="fa-solid fa-arrows-rotate"></i> Refrescar' +
-                        '</button>' +
-                    '</div>' +
-                    '<table><thead><tr>' +
-                        '<th>Mes</th><th>Recibos</th><th style="text-align:right">Total</th><th style="width:35%">Volumen</th>' +
-                    '</tr></thead><tbody>' +
-                    (porMes.length === 0
-                        ? '<tr><td colspan="4" class="table-empty">Sin datos. Presioná <b>Refrescar</b> para generar la caché.</td></tr>'
-                        : porMes.map(function (r) {
-                            var t   = Number(r.total) || 0;
-                            var pct = maxMes > 0 ? Math.round((t / maxMes) * 100) : 0;
-                            return '<tr>' +
-                                '<td><div class="td-nombre">' + e(fmtMes(r.mes)) + '</div></td>' +
-                                '<td class="text-muted">' + fmtInt(r.cantidad || 0) + '</td>' +
-                                '<td style="text-align:right;font-weight:600">' + fmtMoney(t) + '</td>' +
-                                '<td>' +
-                                    '<div style="height:6px;background:var(--bg);border-radius:99px;overflow:hidden">' +
-                                        '<div style="height:100%;width:' + pct + '%;background:var(--primary)"></div>' +
-                                    '</div>' +
-                                '</td>' +
-                            '</tr>';
-                        }).join('')) +
-                    '</tbody></table>' +
-                '</div>' +
+                analizadorGraficoMensualHTML({
+                    titulo:      'Cobros por mes',
+                    rows:        d.cobros_por_mes || [],
+                    actualizado: d.cobros_actualizado,
+                    btnId:       'analRefrescarCobros',
+                    btnTitle:    'Recalcular desde recibos (RX) emitidos',
+                    colCantidad: 'Recibos',
+                    barColor:    'var(--success)'
+                }) +
+                analizadorGraficoMensualHTML({
+                    titulo:      'Pagos por mes',
+                    rows:        d.pagos_por_mes || [],
+                    actualizado: d.pagos_actualizado,
+                    btnId:       'analRefrescarPagos',
+                    btnTitle:    'Recalcular desde salidas en Cajas (0.1.01) y Bancos (0.1.03)',
+                    colCantidad: 'Movs.',
+                    barColor:    'var(--danger)'
+                }) +
+            '</div>' +
 
+            '<div class="dash-grid" style="margin-top:20px">' +
                 '<div class="table-card">' +
                     '<div class="dash-table-header">' +
                         '<div><div>Top clientes</div>' +
@@ -410,46 +451,624 @@
                         }).join('')) +
                     '</tbody></table>' +
                 '</div>' +
-            '</div>' +
 
-            '<div class="table-card" style="margin-top:20px">' +
-                '<div class="dash-table-header">' +
-                    '<div><div>Comprobantes recientes</div>' +
-                    '<div class="text-muted text-sm" style="font-weight:400;">Últimas emisiones</div></div>' +
+                '<div class="table-card">' +
+                    '<div class="dash-table-header">' +
+                        '<div><div>Comprobantes recientes</div>' +
+                        '<div class="text-muted text-sm" style="font-weight:400;">Últimas emisiones</div></div>' +
+                    '</div>' +
+                    '<table><thead><tr>' +
+                        '<th>Emisión</th><th>Tipo</th><th>Cliente</th><th style="text-align:right">Total</th>' +
+                    '</tr></thead><tbody>' +
+                    (recient.length === 0
+                        ? '<tr><td colspan="4" class="table-empty">Sin comprobantes recientes.</td></tr>'
+                        : recient.map(function (r) {
+                            return '<tr>' +
+                                '<td class="text-muted">' + e(r.emision || '—') + '</td>' +
+                                '<td>' + e(r.tipo || '—') + '</td>' +
+                                '<td><div class="td-nombre">' + e(r.razon || '—') + '</div></td>' +
+                                '<td style="text-align:right;font-weight:600">' + fmtMoney(r.total || 0) + '</td>' +
+                            '</tr>';
+                        }).join('')) +
+                    '</tbody></table>' +
                 '</div>' +
-                '<table><thead><tr>' +
-                    '<th>Emisión</th><th>Tipo</th><th>Cliente</th><th style="text-align:right">Total</th>' +
-                '</tr></thead><tbody>' +
-                (recient.length === 0
-                    ? '<tr><td colspan="4" class="table-empty">Sin comprobantes recientes.</td></tr>'
-                    : recient.map(function (r) {
-                        return '<tr>' +
-                            '<td class="text-muted">' + e(r.emision || '—') + '</td>' +
-                            '<td>' + e(r.tipo || '—') + '</td>' +
-                            '<td><div class="td-nombre">' + e(r.razon || '—') + '</div></td>' +
-                            '<td style="text-align:right;font-weight:600">' + fmtMoney(r.total || 0) + '</td>' +
-                        '</tr>';
-                    }).join('')) +
-                '</tbody></table>' +
             '</div>';
 
-        var btnRefr = document.getElementById('analRefrescarCobros');
-        if (btnRefr) {
-            btnRefr.addEventListener('click', async function () {
-                btnRefr.disabled = true;
-                var label = btnRefr.innerHTML;
-                btnRefr.innerHTML = '<i class="fa-solid fa-arrows-rotate fa-spin"></i> Refrescando…';
-                try {
-                    await api('/api/analizador_refrescar.php', { method: 'POST' });
-                    toast('Cobros actualizados');
-                    await renderAnalizador(view);
-                } catch (err) {
-                    btnRefr.disabled = false;
-                    btnRefr.innerHTML = label;
-                    toast(err.message || 'No se pudo refrescar.', true);
-                }
-            });
+        analizadorBindRefresh('analRefrescarCobros', '/api/analizador_refrescar_cobros.php', 'Cobros actualizados', view);
+        analizadorBindRefresh('analRefrescarPagos',  '/api/analizador_refrescar_pagos.php',  'Pagos actualizados',  view);
+    }
+
+    // -------- Vista: Cuentas (Plan de Cuentas contable) -------------------
+    //
+    // Arbol jerarquico de cuentas contables (activo/pasivo/patrimonio/
+    // ingreso/egreso). El backend devuelve la lista plana ordenada por
+    // codigo; aca la reconstruimos como arbol para renderizar con expand/
+    // collapse. Cada cuenta puede tener subcuentas.
+    //
+    // Endpoint: /api/cuentas.php (GET lista+kpis, GET ?id, POST, PUT, DELETE,
+    // GET ?recalcular=1, GET ?ultima_fecha=1&id).
+
+    var ctaState = {
+        cuentas:    [],
+        busqueda:   '',
+        filtroTipo: '',
+        colapsadas: {},
+        editandoId: null
+    };
+
+    var CTA_TIPO_LABEL = {
+        activo:     'Activo',
+        pasivo:     'Pasivo',
+        patrimonio: 'Patrimonio',
+        ingreso:    'Ingreso',
+        egreso:     'Egreso'
+    };
+    var CTA_TIPO_BADGE = {
+        activo:     'badge-info',
+        pasivo:     'badge-danger',
+        patrimonio: 'badge-warn',
+        ingreso:    'badge-success',
+        egreso:     'badge-warn'
+    };
+
+    function ctaFmtSaldo(v) {
+        var n = Number(v);
+        if (!isFinite(n)) n = 0;
+        var s = n.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return '$ ' + s;
+    }
+
+    async function renderCuentas(view) {
+        var data = await api('/api/cuentas.php');
+        ctaState.cuentas = data.cuentas || [];
+        var k = data.kpis || {};
+
+        view.innerHTML =
+            '<div class="page-header"><div>' +
+                '<h1>Plan de Cuentas</h1>' +
+                '<p>Cuentas contables jerárquicas (activo, pasivo, patrimonio, ingresos, egresos).</p>' +
+            '</div></div>' +
+
+            '<div class="stats-bar">' +
+                statCard('Total cuentas',  k.total      || 0, 'orange', 'Registradas en el plan') +
+                statCard('Activo',         k.activo     || 0, 'green',  'Cuentas de activo') +
+                statCard('Pasivo',         k.pasivo     || 0, 'red',    'Cuentas de pasivo') +
+                statCard('Patrimonio',     k.patrimonio || 0, 'orange', 'Cuentas patrimoniales') +
+                statCard('Ingresos',       k.ingreso    || 0, 'green',  'Cuentas de ingresos') +
+                statCard('Egresos',        k.egreso     || 0, 'red',    'Cuentas de egresos') +
+            '</div>' +
+
+            '<div class="toolbar">' +
+                '<div class="toolbar-left">' +
+                    '<div class="search-wrap">' +
+                        '<input type="search" id="ctaSearch" class="search-input" placeholder="Buscar por código o nombre..." value="' + e(ctaState.busqueda) + '">' +
+                        '<button class="search-clear" id="ctaSearchClear" type="button" style="' + (ctaState.busqueda ? '' : 'display:none;') + '">&times;</button>' +
+                    '</div>' +
+                    ctaFiltroChip('',           'Todos') +
+                    ctaFiltroChip('activo',     'Activo') +
+                    ctaFiltroChip('pasivo',     'Pasivo') +
+                    ctaFiltroChip('patrimonio', 'Patrimonio') +
+                    ctaFiltroChip('ingreso',    'Ingresos') +
+                    ctaFiltroChip('egreso',     'Egresos') +
+                '</div>' +
+                '<div class="toolbar-right">' +
+                    '<button class="btn btn-ghost" id="ctaExpandir"  type="button" title="Expandir todo">' +
+                        '<i class="fa-solid fa-plus-square"></i> Expandir</button>' +
+                    '<button class="btn btn-ghost" id="ctaColapsar"  type="button" title="Colapsar todo">' +
+                        '<i class="fa-solid fa-minus-square"></i> Colapsar</button>' +
+                    '<button class="btn btn-secondary" id="ctaRecalcular" type="button" title="Recalcular saldos desde asientos">' +
+                        '<i class="fa-solid fa-arrows-rotate"></i> Recalcular saldos</button>' +
+                    '<button class="btn btn-primary" id="ctaNueva" type="button">+ Nueva cuenta</button>' +
+                '</div>' +
+            '</div>' +
+
+            '<div class="table-card">' +
+                '<table><thead><tr>' +
+                    '<th style="width:180px;">Código</th>' +
+                    '<th>Nombre</th>' +
+                    '<th style="width:120px;">Tipo</th>' +
+                    '<th style="width:80px;text-align:center;">Nat.</th>' +
+                    '<th style="width:90px;text-align:center;">Imputable</th>' +
+                    '<th style="width:160px;text-align:right;">Saldo</th>' +
+                    '<th style="width:120px;text-align:right;">Acciones</th>' +
+                '</tr></thead><tbody id="ctaTbody">' +
+                renderFilasCuentas() +
+                '</tbody></table>' +
+            '</div>' +
+
+            modalCuentaHtml() +
+            modalConsultarCuentaHtml() +
+            confirmDeleteCuentaHtml();
+
+        wireCuentasView();
+    }
+
+    function ctaFiltroChip(val, label) {
+        var active = String(ctaState.filtroTipo) === String(val) ? ' active' : '';
+        return '<button type="button" class="filter-chip' + active + '" data-tipo="' + e(val) + '">' + e(label) + '</button>';
+    }
+
+    function renderFilasCuentas() {
+        if (!ctaState.cuentas.length) {
+            return '<tr><td colspan="7" class="table-empty">No hay cuentas cargadas.</td></tr>';
         }
+
+        // Construimos el arbol.
+        var byId = {};
+        ctaState.cuentas.forEach(function (c) {
+            byId[c.id] = { data: c, children: [] };
+        });
+        var raices = [];
+        ctaState.cuentas.forEach(function (c) {
+            var pid = c.padre;
+            if (pid && byId[pid]) byId[pid].children.push(byId[c.id]);
+            else raices.push(byId[c.id]);
+        });
+
+        var busq  = ctaState.busqueda.trim().toLowerCase();
+        var tipo  = ctaState.filtroTipo;
+        var plano = !!(busq || tipo);
+
+        var html = '';
+        if (plano) {
+            ctaState.cuentas.forEach(function (c) {
+                if (tipo && c.tipo !== tipo) return;
+                if (busq) {
+                    var hay = ((c.codigo || '') + ' ' + (c.nombre || '')).toLowerCase();
+                    if (hay.indexOf(busq) === -1) return;
+                }
+                html += filaCuenta(c, 0, false, false);
+            });
+            if (!html) {
+                html = '<tr><td colspan="7" class="table-empty">Ninguna cuenta coincide con la búsqueda.</td></tr>';
+            }
+        } else {
+            function walk(nodo, depth) {
+                var c = nodo.data;
+                var tieneHijos = nodo.children.length > 0;
+                var colapsada  = !!ctaState.colapsadas[c.id];
+                html += filaCuenta(c, depth, tieneHijos, colapsada);
+                if (tieneHijos && !colapsada) {
+                    nodo.children.forEach(function (h) { walk(h, depth + 1); });
+                }
+            }
+            raices.forEach(function (r) { walk(r, 0); });
+        }
+        return html;
+    }
+
+    function filaCuenta(c, depth, tieneHijos, colapsada) {
+        var indent = depth * 22;
+        var toggle = tieneHijos
+            ? '<button class="btn-icon-sm" data-act="toggle" title="' + (colapsada ? 'Expandir' : 'Colapsar') + '" style="width:22px;padding:0 4px;">' +
+                    (colapsada ? '<i class="fa-solid fa-caret-right"></i>' : '<i class="fa-solid fa-caret-down"></i>') +
+              '</button>'
+            : '<span style="display:inline-block;width:22px;"></span>';
+
+        var tipoBadge = c.tipo
+            ? '<span class="badge ' + (CTA_TIPO_BADGE[c.tipo] || 'badge-muted') + '">' + e(CTA_TIPO_LABEL[c.tipo] || c.tipo) + '</span>'
+            : '<span class="badge badge-muted">—</span>';
+
+        var nat = c.naturaleza === 'acreedora'
+            ? '<span style="color:var(--danger);font-weight:700;">A</span>'
+            : '<span style="color:var(--info);font-weight:700;">D</span>';
+
+        var imputable = parseInt(c.imputable, 10) === 1
+            ? '<i class="fa-solid fa-check" style="color:var(--success);"></i>'
+            : '<span class="text-muted">—</span>';
+
+        var saldoVal   = parseFloat(c.saldo || 0);
+        var saldoColor = saldoVal > 0 ? 'var(--success)' : (saldoVal < 0 ? 'var(--danger)' : 'var(--muted)');
+        var negrita    = parseInt(c.imputable, 10) === 0 ? 'font-weight:700;' : '';
+
+        return '<tr data-id="' + c.id + '">' +
+            '<td><span style="display:inline-flex;align-items:center;gap:4px;padding-left:' + indent + 'px;">' +
+                toggle +
+                '<code class="text-sm">' + e(c.codigo || ('#' + c.id)) + '</code></span></td>' +
+            '<td style="' + negrita + '">' + e(c.nombre || '—') + '</td>' +
+            '<td>' + tipoBadge + '</td>' +
+            '<td style="text-align:center;">' + nat + '</td>' +
+            '<td style="text-align:center;">' + imputable + '</td>' +
+            '<td style="text-align:right;font-family:monospace;font-weight:600;color:' + saldoColor + ';">' +
+                ctaFmtSaldo(saldoVal) +
+            '</td>' +
+            '<td><div class="actions" style="justify-content:flex-end;">' +
+                '<button class="btn-icon-sm" data-act="view"       type="button" title="Consultar"><i class="fa-solid fa-eye"></i></button>' +
+                '<button class="btn-icon-sm" data-act="add-child"  type="button" title="Agregar subcuenta"><i class="fa-solid fa-plus"></i></button>' +
+                '<button class="btn-icon-sm" data-act="edit"       type="button" title="Editar"><i class="fa-solid fa-pencil"></i></button>' +
+                '<button class="btn-icon-sm" data-act="delete"     type="button" title="Eliminar"><i class="fa-solid fa-trash"></i></button>' +
+            '</div></td>' +
+        '</tr>';
+    }
+
+    function modalCuentaHtml() {
+        return '<div class="modal-backdrop" id="ctaModal"><div class="modal">' +
+            '<div class="modal-header">' +
+                '<div class="modal-title">' +
+                    '<span id="ctaModalTitulo">Nueva cuenta</span>' +
+                    '<span class="modal-subtitle" id="ctaModalSub"></span>' +
+                '</div>' +
+                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+            '</div>' +
+            '<form id="ctaForm" novalidate>' +
+                '<input type="hidden" id="ctaId" value="">' +
+                '<div class="modal-body">' +
+                    '<div class="alert alert-error" id="ctaError" style="display:none;"></div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group" style="grid-column:1 / -1;"><label for="cta-nombre">Nombre</label>' +
+                            '<input id="cta-nombre" name="nombre" type="text" maxlength="255" required></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="cta-padre">Cuenta padre</label>' +
+                            '<select id="cta-padre" name="padre"><option value="">— Sin padre (raíz) —</option></select></div>' +
+                        '<div class="form-group"><label for="cta-orden">Orden</label>' +
+                            '<input id="cta-orden" name="orden" type="number" min="1" step="1" inputmode="numeric" placeholder="Ej: 1">' +
+                            '<div class="text-muted text-sm">Determina el código jerárquico (1, 2, 3…) bajo el mismo padre.</div></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="cta-tipo">Tipo</label>' +
+                            '<select id="cta-tipo" name="tipo">' +
+                                '<option value="activo">Activo (naturaleza deudora)</option>' +
+                                '<option value="pasivo">Pasivo (naturaleza acreedora)</option>' +
+                                '<option value="patrimonio">Patrimonio (naturaleza acreedora)</option>' +
+                                '<option value="ingreso">Ingreso (naturaleza acreedora)</option>' +
+                                '<option value="egreso">Egreso (naturaleza deudora)</option>' +
+                            '</select></div>' +
+                        '<div class="form-group"><label for="cta-categoria">Categoría</label>' +
+                            '<input id="cta-categoria" name="categoria" type="number" step="1" inputmode="numeric" placeholder="Opcional"></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group" style="grid-column:1 / -1;"><label for="cta-obs">Observaciones</label>' +
+                            '<textarea id="cta-obs" name="observaciones" rows="2" maxlength="1000"></textarea></div>' +
+                    '</div>' +
+                    '<div class="text-muted text-sm">' +
+                        'El <b>código</b>, la <b>naturaleza</b> (deudora/acreedora) y si es <b>imputable</b> se derivan automáticamente ' +
+                        'del padre, el orden y el tipo.' +
+                    '</div>' +
+                '</div>' +
+                '<div class="modal-footer">' +
+                    '<button type="button" class="btn btn-ghost" data-act="close">Cancelar</button>' +
+                    '<button type="submit" class="btn btn-primary" id="ctaGuardar">Guardar</button>' +
+                '</div>' +
+            '</form>' +
+        '</div></div>';
+    }
+
+    function modalConsultarCuentaHtml() {
+        return '<div class="modal-backdrop" id="ctaConsultar"><div class="modal modal-wide">' +
+            '<div class="modal-header">' +
+                '<div class="modal-title">' +
+                    '<span>Consultar cuenta</span>' +
+                    '<span class="modal-subtitle" id="ctaConsSub"></span>' +
+                '</div>' +
+                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+            '</div>' +
+            '<div class="modal-body">' +
+                '<dl class="data-list" id="ctaConsBody"></dl>' +
+            '</div>' +
+            '<div class="modal-footer">' +
+                '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+            '</div>' +
+        '</div></div>';
+    }
+
+    function confirmDeleteCuentaHtml() {
+        return '<div class="confirm-backdrop" id="ctaConfirm"><div class="confirm-box">' +
+            '<div class="confirm-title">Eliminar cuenta</div>' +
+            '<div class="confirm-msg" id="ctaConfirmMsg">Esta acción no se puede deshacer.</div>' +
+            '<div class="confirm-actions">' +
+                '<button class="btn btn-ghost"  data-act="cancel" type="button">Cancelar</button>' +
+                '<button class="btn btn-danger" id="ctaConfirmBtn" type="button">Eliminar</button>' +
+            '</div>' +
+        '</div></div>';
+    }
+
+    function poblarSelectPadreCuenta(excludeId) {
+        var sel = document.getElementById('cta-padre');
+        var html = '<option value="">— Sin padre (raíz) —</option>';
+
+        // Excluir la cuenta y sus descendientes (no puede ser su propio padre).
+        var excluidos = {};
+        if (excludeId) {
+            excluidos[excludeId] = true;
+            var cambio = true;
+            while (cambio) {
+                cambio = false;
+                ctaState.cuentas.forEach(function (c) {
+                    if (c.padre && excluidos[c.padre] && !excluidos[c.id]) {
+                        excluidos[c.id] = true;
+                        cambio = true;
+                    }
+                });
+            }
+        }
+
+        ctaState.cuentas.forEach(function (c) {
+            if (excluidos[c.id]) return;
+            var label = (c.codigo || '#' + c.id) + ' — ' + (c.nombre || '');
+            html += '<option value="' + c.id + '">' + e(label) + '</option>';
+        });
+        sel.innerHTML = html;
+    }
+
+    function wireCuentasView() {
+        var searchInput = document.getElementById('ctaSearch');
+        var searchClear = document.getElementById('ctaSearchClear');
+        var tbody       = document.getElementById('ctaTbody');
+        var modal       = document.getElementById('ctaModal');
+        var modalTit    = document.getElementById('ctaModalTitulo');
+        var modalSub    = document.getElementById('ctaModalSub');
+        var modalError  = document.getElementById('ctaError');
+        var form        = document.getElementById('ctaForm');
+        var fId         = document.getElementById('ctaId');
+        var fNombre     = document.getElementById('cta-nombre');
+        var fTipo       = document.getElementById('cta-tipo');
+        var fPadre      = document.getElementById('cta-padre');
+        var fOrden      = document.getElementById('cta-orden');
+        var fCategoria  = document.getElementById('cta-categoria');
+        var fObs        = document.getElementById('cta-obs');
+        var btnGuardar  = document.getElementById('ctaGuardar');
+
+        var confirmBox  = document.getElementById('ctaConfirm');
+        var confirmMsg  = document.getElementById('ctaConfirmMsg');
+        var btnDelete   = document.getElementById('ctaConfirmBtn');
+        var consultarM  = document.getElementById('ctaConsultar');
+        var consultarS  = document.getElementById('ctaConsSub');
+        var consultarB  = document.getElementById('ctaConsBody');
+
+        var pendingDeleteId = null;
+        var searchTimer     = null;
+
+        function refreshTable() {
+            tbody.innerHTML = renderFilasCuentas();
+        }
+
+        // Buscador (client-side, no vuelve al servidor).
+        searchInput.addEventListener('input', function () {
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(function () {
+                ctaState.busqueda = searchInput.value;
+                searchClear.style.display = searchInput.value ? '' : 'none';
+                refreshTable();
+            }, 200);
+        });
+        searchClear.addEventListener('click', function () {
+            searchInput.value = '';
+            ctaState.busqueda = '';
+            searchClear.style.display = 'none';
+            refreshTable();
+            searchInput.focus();
+        });
+
+        // Chips de tipo.
+        document.querySelectorAll('.toolbar-left .filter-chip').forEach(function (chip) {
+            chip.addEventListener('click', function () {
+                var val = chip.dataset.tipo || '';
+                ctaState.filtroTipo = val;
+                document.querySelectorAll('.toolbar-left .filter-chip').forEach(function (c) {
+                    c.classList.toggle('active', c === chip);
+                });
+                refreshTable();
+            });
+        });
+
+        // Expandir / colapsar todo.
+        document.getElementById('ctaExpandir').addEventListener('click', function () {
+            ctaState.colapsadas = {};
+            refreshTable();
+        });
+        document.getElementById('ctaColapsar').addEventListener('click', function () {
+            ctaState.colapsadas = {};
+            var conHijos = {};
+            ctaState.cuentas.forEach(function (c) { if (c.padre) conHijos[c.padre] = true; });
+            Object.keys(conHijos).forEach(function (id) { ctaState.colapsadas[id] = true; });
+            refreshTable();
+        });
+
+        // Recalcular saldos.
+        var btnRec = document.getElementById('ctaRecalcular');
+        btnRec.addEventListener('click', async function () {
+            var origHtml = btnRec.innerHTML;
+            btnRec.disabled = true;
+            btnRec.innerHTML = '<i class="fa-solid fa-arrows-rotate fa-spin"></i> Recalculando…';
+            try {
+                var data = await api('/api/cuentas.php?recalcular=1');
+                toast('Saldos recalculados (' + (data.cuentas || 0) + ' cuentas).');
+                await navigate();
+            } catch (err) {
+                toast(err.message || 'No se pudo recalcular.', true);
+                btnRec.disabled = false;
+                btnRec.innerHTML = origHtml;
+            }
+        });
+
+        // Modal ABM.
+        function resetForm() {
+            form.reset();
+            fId.value = '';
+        }
+        function openModal()  { modal.classList.add('open'); }
+        function closeModal() {
+            modal.classList.remove('open');
+            modalError.style.display = 'none';
+            modalError.textContent = '';
+        }
+        function showFormError(msg) {
+            modalError.textContent = msg;
+            modalError.style.display = '';
+        }
+
+        modal.addEventListener('click', function (ev) {
+            if (ev.target === modal || ev.target.closest('[data-act="close"]')) closeModal();
+        });
+        consultarM.addEventListener('click', function (ev) {
+            if (ev.target === consultarM || ev.target.closest('[data-act="close"]')) {
+                consultarM.classList.remove('open');
+            }
+        });
+        confirmBox.addEventListener('click', function (ev) {
+            if (ev.target === confirmBox || ev.target.closest('[data-act="cancel"]')) {
+                confirmBox.classList.remove('open');
+                pendingDeleteId = null;
+            }
+        });
+
+        function abrirNueva(parentId) {
+            ctaState.editandoId = null;
+            resetForm();
+            modalTit.textContent = 'Nueva cuenta';
+            modalSub.textContent = '';
+            poblarSelectPadreCuenta(null);
+            if (parentId) {
+                var padre = ctaState.cuentas.find(function (x) { return x.id === parentId; });
+                if (padre) {
+                    fPadre.value = parentId;
+                    fTipo.value  = padre.tipo || 'activo';
+                }
+            }
+            openModal();
+            fNombre.focus();
+        }
+
+        function abrirEditar(id) {
+            var c = ctaState.cuentas.find(function (x) { return x.id === id; });
+            if (!c) return;
+            ctaState.editandoId = id;
+            resetForm();
+            modalTit.textContent = 'Editar cuenta';
+            modalSub.innerHTML   = '<code>' + e(c.codigo || '#' + id) + '</code>';
+            fId.value            = c.id;
+            fNombre.value        = c.nombre || '';
+            fTipo.value          = c.tipo || 'activo';
+            fOrden.value         = c.orden != null ? c.orden : '';
+            fCategoria.value     = c.categoria != null ? c.categoria : '';
+            fObs.value           = c.observaciones || '';
+            poblarSelectPadreCuenta(id);
+            fPadre.value         = c.padre != null ? c.padre : '';
+            openModal();
+            fNombre.focus();
+        }
+
+        async function abrirConsulta(id) {
+            consultarS.innerHTML = '<code>#' + id + '</code>';
+            consultarB.innerHTML = '<div style="display:flex;justify-content:center;padding:24px"><div class="spin"></div></div>';
+            consultarM.classList.add('open');
+
+            var c;
+            try {
+                c = await api('/api/cuentas.php?id=' + id);
+            } catch (err) {
+                consultarB.innerHTML = '<div class="alert alert-error">' + e(err.message) + '</div>';
+                return;
+            }
+
+            var saldoVal   = parseFloat(c.saldo || 0);
+            var saldoColor = saldoVal > 0 ? 'var(--success)' : (saldoVal < 0 ? 'var(--danger)' : 'var(--muted)');
+            var saldoHtml  = '<span style="font-family:monospace;font-weight:700;color:' + saldoColor + '">' + ctaFmtSaldo(saldoVal) + '</span>';
+
+            var tipoLabel  = CTA_TIPO_LABEL[c.tipo] || c.tipo || '—';
+            var natLabel   = c.naturaleza === 'acreedora' ? 'Acreedora' : (c.naturaleza === 'deudora' ? 'Deudora' : '—');
+            var impLabel2  = parseInt(c.imputable, 10) === 1 ? 'Sí (recibe asientos)' : 'No (cuenta de agrupación)';
+            var padreTxt = c.padre
+                ? ((c.padre_codigo ? c.padre_codigo + ' — ' : '') + (c.padre_nombre || '') + ' (#' + c.padre + ')')
+                : 'Cuenta raíz';
+
+            consultarS.innerHTML = '<code>' + e(c.codigo || '#' + c.id) + '</code>';
+            consultarB.innerHTML =
+                abmRow('Código',        '<code>' + e(c.codigo || '—') + '</code>') +
+                abmRow('Nombre',        e(c.nombre || '—')) +
+                abmRow('Tipo',          e(tipoLabel)) +
+                abmRow('Naturaleza',    e(natLabel)) +
+                abmRow('Imputable',     e(impLabel2)) +
+                abmRow('Nivel',         'Nivel ' + (c.nivel != null ? c.nivel : '—')) +
+                abmRow('Orden',         c.orden != null ? String(c.orden) : '—', c.orden == null) +
+                abmRow('Categoría',     c.categoria != null ? String(c.categoria) : '—', c.categoria == null) +
+                abmRow('Cuenta padre',  e(padreTxt), c.padre == null) +
+                abmRow('Saldo',         saldoHtml) +
+                abmRow('Última fecha',  '<span id="ctaConsUlt">…</span>') +
+                abmRowTxt('Observaciones', c.observaciones, 'Sin observaciones', true);
+
+            // Ultima fecha async.
+            try {
+                var uf = await api('/api/cuentas.php?ultima_fecha=1&id=' + id);
+                var span = document.getElementById('ctaConsUlt');
+                if (span) span.textContent = uf.ultima_fecha ? String(uf.ultima_fecha).replace('T', ' ').replace(/\.\d+$/, '') : 'Sin movimientos';
+            } catch (_) {}
+        }
+
+        document.getElementById('ctaNueva').addEventListener('click', function () { abrirNueva(null); });
+
+        tbody.addEventListener('click', async function (ev) {
+            var btn = ev.target.closest('button[data-act]');
+            if (!btn) return;
+            var tr = btn.closest('tr[data-id]');
+            if (!tr) return;
+            var id = parseInt(tr.dataset.id, 10);
+
+            if (btn.dataset.act === 'toggle') {
+                if (ctaState.colapsadas[id]) delete ctaState.colapsadas[id];
+                else ctaState.colapsadas[id] = true;
+                refreshTable();
+                return;
+            }
+            if (btn.dataset.act === 'view')      { abrirConsulta(id); return; }
+            if (btn.dataset.act === 'edit')      { abrirEditar(id);   return; }
+            if (btn.dataset.act === 'add-child') { abrirNueva(id);    return; }
+            if (btn.dataset.act === 'delete') {
+                var c = ctaState.cuentas.find(function (x) { return x.id === id; });
+                var nombre = c ? (c.codigo ? c.codigo + ' — ' : '') + (c.nombre || '#' + id) : '#' + id;
+                confirmMsg.textContent = '¿Eliminar la cuenta "' + nombre + '"? Esta acción no se puede deshacer.';
+                pendingDeleteId = id;
+                confirmBox.classList.add('open');
+            }
+        });
+
+        btnDelete.addEventListener('click', async function () {
+            if (!pendingDeleteId) return;
+            btnDelete.disabled = true;
+            try {
+                await api('/api/cuentas.php?id=' + pendingDeleteId, { method: 'DELETE' });
+                toast('Cuenta eliminada.');
+                await navigate();
+            } catch (err) {
+                toast(err.message, true);
+            } finally {
+                btnDelete.disabled = false;
+                confirmBox.classList.remove('open');
+                pendingDeleteId = null;
+            }
+        });
+
+        form.addEventListener('submit', async function (ev) {
+            ev.preventDefault();
+            modalError.style.display = 'none';
+
+            var payload = {
+                nombre:        fNombre.value.trim(),
+                tipo:          fTipo.value,
+                padre:         fPadre.value ? parseInt(fPadre.value, 10) : null,
+                orden:         fOrden.value !== '' ? parseInt(fOrden.value, 10) : null,
+                categoria:     fCategoria.value !== '' ? parseInt(fCategoria.value, 10) : null,
+                observaciones: fObs.value.trim()
+            };
+
+            btnGuardar.disabled = true;
+            try {
+                if (ctaState.editandoId) {
+                    await api('/api/cuentas.php?id=' + ctaState.editandoId, { method: 'PUT', body: payload });
+                    toast('Cuenta actualizada.');
+                } else {
+                    await api('/api/cuentas.php', { method: 'POST', body: payload });
+                    toast('Cuenta creada.');
+                }
+                closeModal();
+                await navigate();
+            } catch (err) {
+                showFormError(err.message);
+            } finally {
+                btnGuardar.disabled = false;
+            }
+        });
     }
 
     // -------- Vista: Comprobantes (Presupuestos / Facturas / Recibos) -----
