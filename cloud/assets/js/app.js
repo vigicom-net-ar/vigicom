@@ -7267,6 +7267,11 @@
             // alfabéticamente por título. Al agregar una nueva, insertala
             // en la posición correcta — no la pegues al final.
             '<div class="tile-grid">' +
+                '<button type="button" class="tile-card" id="cfgTileParametros">' +
+                    '<span class="tile-icon">🧩</span>' +
+                    '<span class="tile-title">Editor de parámetros</span>' +
+                    '<span class="tile-desc">Variables runtime (clave / valor) que el resto del sistema lee para configurarse sin redeploy.</span>' +
+                '</button>' +
                 '<button type="button" class="tile-card" id="cfgTileExpDB">' +
                     '<span class="tile-icon">🗄️</span>' +
                     '<span class="tile-title">Explorador DB</span>' +
@@ -7282,11 +7287,6 @@
                     '<span class="tile-title">Migrador DB</span>' +
                     '<span class="tile-desc">Aplicá las migraciones pendientes de <code>db/migrations/</code> contra la BD del entorno actual.</span>' +
                 '</button>' +
-                '<button type="button" class="tile-card" id="cfgTileParametros">' +
-                    '<span class="tile-icon">⚙️</span>' +
-                    '<span class="tile-title">Parámetros</span>' +
-                    '<span class="tile-desc">Variables internas del sistema.</span>' +
-                '</button>' +
                 '<button type="button" class="tile-card" id="cfgTileTareas">' +
                     '<span class="tile-icon">⏰</span>' +
                     '<span class="tile-title">Programador de tareas</span>' +
@@ -7299,10 +7299,10 @@
                 '</button>' +
             '</div>' +
 
-            modalParametroFormHtml() +
-            modalConsultarParametroHtml() +
-            confirmDeleteParametroHtml() +
             modalParametrosListaHtml() +
+            modalParametroFormHtml() +
+            ctxMenuParametrosHtml() +
+            confirmParametroHtml() +
             modalExploradorS3Html() +
             confirmDeleteS3Html() +
             ctxMenuS3Html() +
@@ -7330,356 +7330,459 @@
         wireTareasView();
     }
 
+    // ---------- Editor de parámetros (skill: crear_editor_de_parametros) ----
+    //
+    // La API expone las columnas de la tabla `parametros` como
+    //   clave       ← variable
+    //   valor       ← valor
+    //   descripcion ← comentario
+    // (la tabla conserva su esquema histórico; el mapeo lo hace parametros.php)
+
+    var parametrosCache          = [];
+    var parametrosFiltroQ        = '';
+    var parametrosCtxRegistroId  = null;
+    var _parametrosSearchTimer   = null;
+    var parametrosPendingDeleteId = null;
+
     function modalParametrosListaHtml() {
-        return '<div class="modal-backdrop" id="paramListModal"><div class="modal modal-xl">' +
-            '<div class="modal-header">' +
-                '<div class="modal-title"><span>Parámetros</span></div>' +
-                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
-            '</div>' +
-            '<div class="modal-body">' +
-                '<div class="toolbar" style="margin-bottom:0;">' +
-                    '<div class="toolbar-left">' +
-                        '<div class="search-wrap">' +
-                            '<input type="search" id="paramSearch" class="search-input" placeholder="Buscar variable, valor o comentario...">' +
-                            '<button class="search-clear" id="paramSearchClear" type="button" style="display:none;">&times;</button>' +
+        return '<div class="modal-backdrop" id="parametrosBackdrop">' +
+            '<div class="modal" style="max-width:880px">' +
+                '<div class="modal-header">' +
+                    '<div class="modal-title" style="display:flex;align-items:center;gap:8px">' +
+                        '<span style="font-size:1.2rem">🧩</span>' +
+                        '<span>Editor de parámetros</span>' +
+                    '</div>' +
+                    '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+                '</div>' +
+                '<div class="modal-body" style="gap:12px">' +
+                    '<div class="toolbar" style="margin-bottom:0">' +
+                        '<div class="toolbar-left" style="gap:8px;flex-wrap:wrap">' +
+                            '<div class="search-wrap">' +
+                                '<input class="search-input" type="search" id="parametrosSearch" ' +
+                                    'placeholder="🔍 Buscar clave, valor, descripción…">' +
+                                '<button class="search-clear" id="parametrosSearchClear" type="button" style="display:none">&times;</button>' +
+                            '</div>' +
+                            '<button class="btn btn-ghost btn-sm" id="parametrosBtnRefrescar" type="button" title="Refrescar">' +
+                                '<i class="fa-solid fa-rotate"></i>' +
+                            '</button>' +
+                        '</div>' +
+                        '<div class="toolbar-right">' +
+                            '<button class="btn btn-primary" id="parametrosBtnNuevo" type="button">+ Nuevo parámetro</button>' +
                         '</div>' +
                     '</div>' +
-                    '<div class="toolbar-right">' +
-                        '<button class="btn btn-primary" id="paramNuevo" type="button">+ Nuevo parámetro</button>' +
-                    '</div>' +
-                '</div>' +
-                '<div class="table-card">' +
-                    '<table><thead><tr>' +
-                        '<th>Código</th><th>Variable</th><th>Valor</th><th>Comentario</th>' +
-                        '<th style="text-align:right;">Acciones</th>' +
-                    '</tr></thead><tbody id="paramTbody">' +
-                        '<tr><td colspan="5" class="table-empty">Cargando…</td></tr>' +
-                    '</tbody></table>' +
-                    '<div class="table-empty" id="paramEmpty" style="display:none;">No hay parámetros que coincidan con la búsqueda.</div>' +
-                '</div>' +
-                '<div class="text-muted text-sm" id="paramCount"></div>' +
-            '</div>' +
-            '<div class="modal-footer">' +
-                '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
-            '</div>' +
-        '</div></div>';
-    }
-
-    function modalParametroFormHtml() {
-        return '<div class="modal-backdrop" id="paramFormModal"><div class="modal">' +
-            '<div class="modal-header">' +
-                '<div class="modal-title">' +
-                    '<span id="paramFormTitulo">Nuevo parámetro</span>' +
-                    '<span class="modal-subtitle" id="paramFormSub"></span>' +
-                '</div>' +
-                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
-            '</div>' +
-            '<form id="paramForm" novalidate>' +
-                '<input type="hidden" id="paramId" value="">' +
-                '<div class="modal-body">' +
-                    '<div class="alert alert-error" id="paramFormError" style="display:none;"></div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group" style="flex:1 1 100%;"><label for="param-variable">Variable</label>' +
-                            '<input id="param-variable" name="variable" type="text" maxlength="255" required></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group" style="flex:1 1 100%;"><label for="param-valor">Valor</label>' +
-                            '<input id="param-valor" name="valor" type="text" maxlength="255"></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group" style="flex:1 1 100%;"><label for="param-comentario">Comentario</label>' +
-                            '<textarea id="param-comentario" name="comentario" rows="3" maxlength="1024"></textarea></div>' +
+                    '<div class="table-card">' +
+                        '<table>' +
+                            '<thead><tr>' +
+                                '<th style="width:80px">Código</th>' +
+                                '<th style="width:220px">Clave</th>' +
+                                '<th>Valor</th>' +
+                                '<th>Descripción</th>' +
+                                '<th style="width:60px;text-align:center">Acciones</th>' +
+                            '</tr></thead>' +
+                            '<tbody id="parametrosTbody">' +
+                                '<tr><td colspan="5" style="text-align:center;padding:20px"><div class="spin"></div></td></tr>' +
+                            '</tbody>' +
+                        '</table>' +
                     '</div>' +
                 '</div>' +
                 '<div class="modal-footer">' +
-                    '<button type="button" class="btn btn-ghost" data-act="close">Cancelar</button>' +
-                    '<button type="submit" class="btn btn-primary" id="paramGuardar">Guardar</button>' +
+                    '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
                 '</div>' +
-            '</form>' +
-        '</div></div>';
+            '</div>' +
+        '</div>';
     }
 
-    function modalConsultarParametroHtml() {
-        return '<div class="modal-backdrop" id="paramConsultar"><div class="modal">' +
-            '<div class="modal-header">' +
-                '<div class="modal-title">' +
-                    '<span>Consultar parámetro</span>' +
-                    '<span class="modal-subtitle" id="paramConsultarSub"></span>' +
+    function modalParametroFormHtml() {
+        return '<div class="modal-backdrop" id="formParametroBackdrop">' +
+            '<div class="modal" style="max-width:560px">' +
+                '<div class="modal-header">' +
+                    '<div class="modal-title" id="formParametroTitulo" style="display:flex;align-items:center;gap:8px">' +
+                        '<span style="font-size:1.2rem">🧩</span><span>Nuevo parámetro</span>' +
+                    '</div>' +
+                    '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
                 '</div>' +
-                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+                '<form id="formParametro" novalidate>' +
+                    '<input type="hidden" id="formParametroId" value="">' +
+                    '<div class="modal-body">' +
+                        '<div class="form-group">' +
+                            '<label for="formParametroClave">Clave</label>' +
+                            '<input type="text" id="formParametroClave" ' +
+                                'placeholder="ej. smtp_host, moneda_default" ' +
+                                'autocomplete="off" autocapitalize="none" spellcheck="false" ' +
+                                'maxlength="120" style="font-family:monospace">' +
+                            '<div class="field-error" id="formParametroClaveError" style="display:none"></div>' +
+                        '</div>' +
+                        '<div class="form-group">' +
+                            '<label for="formParametroValor">Valor</label>' +
+                            '<textarea id="formParametroValor" placeholder="Valor del parámetro…" ' +
+                                'rows="3" maxlength="255" style="font-family:monospace"></textarea>' +
+                            '<div class="field-error" id="formParametroValorError" style="display:none"></div>' +
+                        '</div>' +
+                        '<div class="form-group">' +
+                            '<label for="formParametroDescripcion">' +
+                                'Descripción <span style="font-weight:400;color:var(--muted)">— opcional</span>' +
+                            '</label>' +
+                            '<input type="text" id="formParametroDescripcion" ' +
+                                'placeholder="Para qué se usa este parámetro" maxlength="1024">' +
+                            '<div class="field-error" id="formParametroDescripcionError" style="display:none"></div>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="modal-footer">' +
+                        '<button type="button" class="btn btn-ghost" data-act="close">Cancelar</button>' +
+                        '<button type="submit" class="btn btn-primary" id="btnGuardarParametro">Guardar</button>' +
+                    '</div>' +
+                '</form>' +
             '</div>' +
-            '<div class="modal-body">' +
-                '<dl class="data-list" id="paramConsultarBody"></dl>' +
-            '</div>' +
-            '<div class="modal-footer">' +
-                '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
-            '</div>' +
-        '</div></div>';
+        '</div>';
     }
 
-    function confirmDeleteParametroHtml() {
-        return '<div class="confirm-backdrop" id="paramConfirm"><div class="confirm-box">' +
+    function ctxMenuParametrosHtml() {
+        return '<div id="parametrosCtxMenu" class="ctx-menu" role="menu">' +
+            '<button type="button" data-action="editar" role="menuitem">' +
+                '<i class="fa-solid fa-pen"></i><span>Editar</span></button>' +
+            '<button type="button" data-action="copiar-clave" role="menuitem">' +
+                '<i class="fa-solid fa-copy"></i><span>Copiar clave</span></button>' +
+            '<div class="ctx-menu-sep"></div>' +
+            '<button type="button" data-action="eliminar" class="ctx-menu-danger" role="menuitem">' +
+                '<i class="fa-solid fa-trash"></i><span>Eliminar</span></button>' +
+        '</div>';
+    }
+
+    function confirmParametroHtml() {
+        return '<div class="confirm-backdrop" id="parametrosConfirm"><div class="confirm-box">' +
             '<div class="confirm-title">Eliminar parámetro</div>' +
-            '<div class="confirm-msg" id="paramConfirmMsg">Esta acción no se puede deshacer.</div>' +
+            '<div class="confirm-msg" id="parametrosConfirmMsg">Esta acción no se puede deshacer.</div>' +
             '<div class="confirm-actions">' +
                 '<button class="btn btn-ghost"  data-act="cancel" type="button">Cancelar</button>' +
-                '<button class="btn btn-danger" id="paramConfirmBtn" type="button">Eliminar</button>' +
+                '<button class="btn btn-danger" id="parametrosConfirmBtn" type="button">Eliminar</button>' +
             '</div>' +
         '</div></div>';
     }
 
-    function renderFilasParametros(parametros) {
-        if (!parametros.length) {
-            return '<tr><td colspan="5" class="table-empty">No hay parámetros cargados.</td></tr>';
+    // ---- Listado ----
+
+    function abrirParametros() {
+        var bd = document.getElementById('parametrosBackdrop');
+        if (!bd) return;
+        parametrosFiltroQ = '';
+        var s = document.getElementById('parametrosSearch');
+        if (s) s.value = '';
+        var sc = document.getElementById('parametrosSearchClear');
+        if (sc) sc.style.display = 'none';
+        bd.classList.add('open');
+        cargarParametros();
+    }
+
+    function cerrarParametros() {
+        var bd = document.getElementById('parametrosBackdrop');
+        if (bd) bd.classList.remove('open');
+    }
+
+    function parametrosOnSearch(v) {
+        parametrosFiltroQ = v || '';
+        var sc = document.getElementById('parametrosSearchClear');
+        if (sc) sc.style.display = parametrosFiltroQ ? '' : 'none';
+        if (_parametrosSearchTimer) clearTimeout(_parametrosSearchTimer);
+        _parametrosSearchTimer = setTimeout(cargarParametros, 250);
+    }
+
+    function parametrosLimpiarBusqueda() {
+        var i = document.getElementById('parametrosSearch');
+        if (i) i.value = '';
+        parametrosFiltroQ = '';
+        var sc = document.getElementById('parametrosSearchClear');
+        if (sc) sc.style.display = 'none';
+        cargarParametros();
+    }
+
+    async function cargarParametros() {
+        var tbody = document.getElementById('parametrosTbody');
+        if (!tbody) return;
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px"><div class="spin"></div></td></tr>';
+        var qs = new URLSearchParams();
+        if (parametrosFiltroQ) qs.set('q', parametrosFiltroQ);
+        qs.set('limite', '500');
+        try {
+            var d = await api('/api/parametros.php' + (qs.toString() ? ('?' + qs.toString()) : ''));
+            parametrosCache = d.data || [];
+            renderParametros(parametrosCache);
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="5" class="table-empty">✗ ' + e(err.message) + '</td></tr>';
         }
-        return parametros.map(function (p) {
-            var busq = String((p.variable || '') + ' ' + (p.valor || '') + ' ' + (p.comentario || '')).toLowerCase().trim();
-            return '<tr data-id="' + p.id + '" data-search="' + e(busq) + '">' +
+    }
+
+    function renderParametros(rows) {
+        var tbody = document.getElementById('parametrosTbody');
+        if (!tbody) return;
+        if (!rows || rows.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="table-empty">Sin parámetros para mostrar.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = rows.map(function (p) {
+            var descr = p.descripcion == null ? '' : String(p.descripcion);
+            return '<tr class="row-clickable" data-id="' + p.id + '" style="cursor:pointer">' +
                 '<td class="td-id">#' + p.id + '</td>' +
-                '<td><div class="td-nombre">' + e(p.variable || '—') + '</div></td>' +
-                '<td>' + e(p.valor || '—') + '</td>' +
-                '<td>' + e(p.comentario || '—') + '</td>' +
-                '<td>' +
-                    '<div class="actions" style="justify-content:flex-end;">' +
-                        '<button class="btn-icon-sm" data-act="view"   type="button" title="Consultar"><i class="fa-solid fa-eye"></i></button>' +
-                        '<button class="btn-icon-sm" data-act="edit"   type="button" title="Editar"><i class="fa-solid fa-pencil"></i></button>' +
-                        '<button class="btn-icon-sm" data-act="delete" type="button" title="Eliminar"><i class="fa-solid fa-trash"></i></button>' +
+                '<td style="font-family:monospace;font-weight:600">' + e(p.clave || '') + '</td>' +
+                '<td style="font-family:monospace;color:var(--muted);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" ' +
+                    'title="' + e(p.valor || '') + '">' + e(p.valor || '') + '</td>' +
+                '<td style="font-size:.82rem;color:var(--muted)">' + e(descr) + '</td>' +
+                '<td style="text-align:center">' +
+                    '<div class="actions" style="justify-content:center">' +
+                        '<button class="btn-icon-sm" data-menu-parametro="' + p.id + '" ' +
+                            'onclick="event.stopPropagation()" title="Más acciones">' +
+                            '<i class="fa-solid fa-bars"></i></button>' +
                     '</div>' +
                 '</td>' +
             '</tr>';
         }).join('');
     }
 
+    // ---- Form ----
+
+    function limpiarErroresFormParametro() {
+        ['Clave', 'Valor', 'Descripcion'].forEach(function (f) {
+            var inp = document.getElementById('formParametro' + f);
+            var err = document.getElementById('formParametro' + f + 'Error');
+            if (inp) inp.classList.remove('input-invalid');
+            if (err) { err.style.display = 'none'; err.textContent = ''; }
+        });
+    }
+
+    function mostrarErrorParametro(campo, msg) {
+        var inp = document.getElementById('formParametro' + campo);
+        var err = document.getElementById('formParametro' + campo + 'Error');
+        if (inp) inp.classList.add('input-invalid');
+        if (err) { err.textContent = msg; err.style.display = ''; }
+        if (inp) inp.focus();
+    }
+
+    function abrirNuevoParametro() {
+        limpiarErroresFormParametro();
+        document.getElementById('formParametroId').value = '';
+        document.getElementById('formParametroClave').value = '';
+        document.getElementById('formParametroValor').value = '';
+        document.getElementById('formParametroDescripcion').value = '';
+        var tit = document.getElementById('formParametroTitulo');
+        if (tit) tit.innerHTML = '<span style="font-size:1.2rem">🧩</span><span>Nuevo parámetro</span>';
+        document.getElementById('formParametroBackdrop').classList.add('open');
+        setTimeout(function () { document.getElementById('formParametroClave').focus(); }, 50);
+    }
+
+    function abrirEditarParametro(id) {
+        var p = parametrosCache.find(function (x) { return x.id === id; });
+        if (!p) return;
+        limpiarErroresFormParametro();
+        document.getElementById('formParametroId').value = String(p.id);
+        document.getElementById('formParametroClave').value = p.clave || '';
+        document.getElementById('formParametroValor').value = p.valor || '';
+        document.getElementById('formParametroDescripcion').value = p.descripcion || '';
+        var tit = document.getElementById('formParametroTitulo');
+        if (tit) tit.innerHTML = '<span style="font-size:1.2rem">🧩</span><span>Editar parámetro <span style="color:var(--muted);font-weight:400">#' + p.id + '</span></span>';
+        document.getElementById('formParametroBackdrop').classList.add('open');
+        setTimeout(function () { document.getElementById('formParametroValor').focus(); }, 50);
+    }
+
+    async function guardarParametro(ev) {
+        if (ev) ev.preventDefault();
+        limpiarErroresFormParametro();
+        var idStr       = document.getElementById('formParametroId').value;
+        var clave       = document.getElementById('formParametroClave').value.trim();
+        var valor       = document.getElementById('formParametroValor').value;
+        var descripcion = document.getElementById('formParametroDescripcion').value.trim();
+
+        if (!clave)                            { mostrarErrorParametro('Clave', 'La clave es obligatoria.'); return; }
+        if (!/^[A-Za-z0-9_.\-]+$/.test(clave)) { mostrarErrorParametro('Clave', 'Sólo letras, números, punto, guión y guión bajo.'); return; }
+        if (clave.length > 120)                { mostrarErrorParametro('Clave', 'Máximo 120 caracteres.'); return; }
+        if (valor.length > 255)                { mostrarErrorParametro('Valor', 'Máximo 255 caracteres.'); return; }
+        if (descripcion.length > 1024)         { mostrarErrorParametro('Descripcion', 'Máximo 1024 caracteres.'); return; }
+
+        var btn = document.getElementById('btnGuardarParametro');
+        if (btn) btn.disabled = true;
+        try {
+            var payload = { clave: clave, valor: valor, descripcion: descripcion };
+            if (idStr) {
+                payload.id = parseInt(idStr, 10);
+                await api('/api/parametros.php', { method: 'PUT', body: payload });
+                toast('Parámetro actualizado.');
+            } else {
+                await api('/api/parametros.php', { method: 'POST', body: payload });
+                toast('Parámetro creado.');
+            }
+            document.getElementById('formParametroBackdrop').classList.remove('open');
+            await cargarParametros();
+        } catch (err) {
+            var msg = (err && err.message) ? err.message : 'Error al guardar.';
+            if (/clave/i.test(msg)) mostrarErrorParametro('Clave', msg);
+            else                    toast(msg, { error: true });
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    function eliminarParametro(id) {
+        var p = parametrosCache.find(function (x) { return x.id === id; });
+        if (!p) return;
+        var msg = document.getElementById('parametrosConfirmMsg');
+        if (msg) msg.innerHTML = 'Vas a eliminar el parámetro <strong>' + e(p.clave) + '</strong>. Esta acción no se puede deshacer.';
+        parametrosPendingDeleteId = id;
+        var box = document.getElementById('parametrosConfirm');
+        if (box) box.classList.add('open');
+    }
+
+    async function confirmarEliminarParametro() {
+        var id = parametrosPendingDeleteId;
+        if (!id) return;
+        var btn = document.getElementById('parametrosConfirmBtn');
+        if (btn) btn.disabled = true;
+        try {
+            await api('/api/parametros.php?id=' + id, { method: 'DELETE' });
+            toast('Parámetro eliminado.');
+            document.getElementById('parametrosConfirm').classList.remove('open');
+            parametrosPendingDeleteId = null;
+            await cargarParametros();
+        } catch (err) {
+            toast(err.message || 'Error al eliminar.', { error: true });
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    // ---- Ctx-menu parámetros ----
+
+    function abrirMenuContextoParametros(ev, id) {
+        var m = document.getElementById('parametrosCtxMenu');
+        if (!m) return;
+        parametrosCtxRegistroId = id;
+        var x, y;
+        if (ev && typeof ev.clientX === 'number' && ev.clientX > 0) {
+            x = ev.clientX; y = ev.clientY;
+        } else if (ev && ev.currentTarget && ev.currentTarget.getBoundingClientRect) {
+            var r = ev.currentTarget.getBoundingClientRect();
+            x = r.left; y = r.bottom;
+        } else {
+            x = 100; y = 100;
+        }
+        m.style.left = x + 'px';
+        m.style.top  = y + 'px';
+        m.classList.add('open');
+        setTimeout(function () {
+            var rr = m.getBoundingClientRect();
+            if (rr.right  > window.innerWidth)  m.style.left = (window.innerWidth  - rr.width  - 8) + 'px';
+            if (rr.bottom > window.innerHeight) m.style.top  = (window.innerHeight - rr.height - 8) + 'px';
+        }, 0);
+    }
+
+    function cerrarMenuContextoParametros() {
+        var m = document.getElementById('parametrosCtxMenu');
+        if (m) m.classList.remove('open');
+        parametrosCtxRegistroId = null;
+    }
+
+    // ---- Wire ----
+
     function wireConfigView() {
-        var listModal   = document.getElementById('paramListModal');
-        var tbody       = document.getElementById('paramTbody');
-        var emptyEl     = document.getElementById('paramEmpty');
-        var countEl     = document.getElementById('paramCount');
-        var searchInput = document.getElementById('paramSearch');
-        var searchClear = document.getElementById('paramSearchClear');
+        var tile = document.getElementById('cfgTileParametros');
+        if (tile) tile.addEventListener('click', abrirParametros);
 
-        var formModal   = document.getElementById('paramFormModal');
-        var formTitulo  = document.getElementById('paramFormTitulo');
-        var formSub     = document.getElementById('paramFormSub');
-        var formError   = document.getElementById('paramFormError');
-        var form        = document.getElementById('paramForm');
-        var fId         = document.getElementById('paramId');
-        var btnGuardar  = document.getElementById('paramGuardar');
-
-        var consultar     = document.getElementById('paramConsultar');
-        var consultarSub  = document.getElementById('paramConsultarSub');
-        var consultarBody = document.getElementById('paramConsultarBody');
-
-        var confirmBox = document.getElementById('paramConfirm');
-        var confirmMsg = document.getElementById('paramConfirmMsg');
-        var btnDelete  = document.getElementById('paramConfirmBtn');
-
-        var pendingDeleteId = null;
-        var modoEdicion     = false;
-
-        function abrirListModal() { listModal.classList.add('open'); }
-        function cerrarListModal() { listModal.classList.remove('open'); }
-        function abrirFormModal() { formModal.classList.add('open'); }
-        function cerrarFormModal() {
-            formModal.classList.remove('open');
-            formError.style.display = 'none';
-            formError.textContent = '';
-        }
-        function showFormError(msg) {
-            formError.textContent = msg;
-            formError.style.display = '';
-        }
-        function resetForm() {
-            form.reset();
-            fId.value = '';
-        }
-
-        async function cargarLista() {
-            tbody.innerHTML = '<tr><td colspan="5" class="table-empty">Cargando…</td></tr>';
-            emptyEl.style.display = 'none';
-            countEl.textContent = '';
-            try {
-                var d    = await api('/api/parametros.php');
-                var rows = d.parametros || [];
-                tbody.innerHTML = renderFilasParametros(rows);
-                countEl.textContent = 'Mostrando ' + rows.length + ' parámetro(s).';
-                aplicarBusqueda();
-            } catch (err) {
-                tbody.innerHTML = '<tr><td colspan="5" class="table-empty">' + e(err.message) + '</td></tr>';
-            }
-        }
-
-        function aplicarBusqueda() {
-            var q = (searchInput.value || '').toLowerCase().trim();
-            searchClear.style.display = q ? '' : 'none';
-            var visibles = 0;
-            var hayFilas = false;
-            tbody.querySelectorAll('tr[data-id]').forEach(function (tr) {
-                hayFilas = true;
-                var ok = !q || (tr.dataset.search || '').indexOf(q) !== -1;
-                tr.style.display = ok ? '' : 'none';
-                if (ok) visibles++;
+        var listBd = document.getElementById('parametrosBackdrop');
+        if (listBd) {
+            listBd.addEventListener('click', function (ev) {
+                if (ev.target === listBd || ev.target.closest('[data-act="close"]')) cerrarParametros();
             });
-            emptyEl.style.display = (hayFilas && visibles === 0) ? '' : 'none';
         }
 
-        document.getElementById('cfgTileParametros').addEventListener('click', function () {
-            searchInput.value = '';
-            searchClear.style.display = 'none';
-            abrirListModal();
-            cargarLista();
-        });
+        var s = document.getElementById('parametrosSearch');
+        if (s) s.addEventListener('input', function () { parametrosOnSearch(s.value); });
+        var sc = document.getElementById('parametrosSearchClear');
+        if (sc) sc.addEventListener('click', parametrosLimpiarBusqueda);
+        var btnRef = document.getElementById('parametrosBtnRefrescar');
+        if (btnRef) btnRef.addEventListener('click', cargarParametros);
+        var btnNue = document.getElementById('parametrosBtnNuevo');
+        if (btnNue) btnNue.addEventListener('click', abrirNuevoParametro);
 
-        listModal.addEventListener('click', function (ev) {
-            if (ev.target === listModal || ev.target.closest('[data-act="close"]')) {
-                cerrarListModal();
-            }
-        });
-
-        searchInput.addEventListener('input', aplicarBusqueda);
-        searchClear.addEventListener('click', function () {
-            searchInput.value = '';
-            aplicarBusqueda();
-            searchInput.focus();
-        });
-
-        document.getElementById('paramNuevo').addEventListener('click', function () {
-            modoEdicion = false;
-            resetForm();
-            formTitulo.textContent = 'Nuevo parámetro';
-            formSub.textContent    = '';
-            abrirFormModal();
-            document.getElementById('param-variable').focus();
-        });
-
-        formModal.addEventListener('click', function (ev) {
-            if (ev.target === formModal || ev.target.closest('[data-act="close"]')) {
-                cerrarFormModal();
-            }
-        });
-
-        consultar.addEventListener('click', function (ev) {
-            if (ev.target === consultar || ev.target.closest('[data-act="close"]')) {
-                consultar.classList.remove('open');
-            }
-        });
-
-        async function abrirConsulta(id) {
-            consultarSub.innerHTML  = '<code>#' + id + '</code>';
-            consultarBody.innerHTML = '<div style="display:flex;justify-content:center;padding:24px"><div class="spin"></div></div>';
-            consultar.classList.add('open');
-
-            var p;
-            try {
-                p = await api('/api/parametros.php?id=' + id);
-            } catch (err) {
-                consultarBody.innerHTML = '<div class="alert alert-error">' + e(err.message) + '</div>';
-                return;
-            }
-
-            consultarSub.innerHTML  = '<code>#' + p.id + '</code>';
-            consultarBody.innerHTML =
-                abmRow    ('Código',     '<code>#' + p.id + '</code>') +
-                abmRowTxt ('Variable',   p.variable,   'Sin variable') +
-                abmRowTxt ('Valor',      p.valor,      'Sin valor',      true) +
-                abmRowTxt ('Comentario', p.comentario, 'Sin comentario', true);
+        var tbody = document.getElementById('parametrosTbody');
+        if (tbody) {
+            tbody.addEventListener('click', function (ev) {
+                var btn = ev.target.closest('[data-menu-parametro]');
+                if (btn) {
+                    var idM = parseInt(btn.getAttribute('data-menu-parametro'), 10);
+                    abrirMenuContextoParametros(ev, idM);
+                    return;
+                }
+                var tr = ev.target.closest('tr[data-id]');
+                if (tr) abrirEditarParametro(parseInt(tr.getAttribute('data-id'), 10));
+            });
+            tbody.addEventListener('contextmenu', function (ev) {
+                var tr = ev.target.closest('tr[data-id]');
+                if (!tr) return;
+                ev.preventDefault();
+                abrirMenuContextoParametros(ev, parseInt(tr.getAttribute('data-id'), 10));
+            });
         }
 
-        tbody.addEventListener('click', async function (ev) {
-            var btn = ev.target.closest('button[data-act]');
-            if (!btn || btn.disabled) return;
-            var tr = btn.closest('tr[data-id]');
-            if (!tr) return;
-            var id = parseInt(tr.dataset.id, 10);
-
-            if (btn.dataset.act === 'view') {
-                abrirConsulta(id);
-                return;
-            }
-
-            if (btn.dataset.act === 'edit') {
-                try {
-                    var p = await api('/api/parametros.php?id=' + id);
-                    modoEdicion = true;
-                    resetForm();
-                    fId.value = p.id;
-                    formTitulo.textContent = 'Editar parámetro';
-                    formSub.textContent    = '#' + p.id;
-                    document.getElementById('param-variable').value   = p.variable   || '';
-                    document.getElementById('param-valor').value      = p.valor      || '';
-                    document.getElementById('param-comentario').value = p.comentario || '';
-                    abrirFormModal();
-                    document.getElementById('param-variable').focus();
-                } catch (err) {
-                    toast(err.message, true);
+        var ctx = document.getElementById('parametrosCtxMenu');
+        if (ctx) {
+            ctx.addEventListener('click', function (ev) {
+                var btn = ev.target.closest('button[data-action]');
+                if (!btn) return;
+                var act = btn.getAttribute('data-action');
+                var id  = parametrosCtxRegistroId;
+                cerrarMenuContextoParametros();
+                if (!id) return;
+                if (act === 'editar')       abrirEditarParametro(id);
+                else if (act === 'eliminar') eliminarParametro(id);
+                else if (act === 'copiar-clave') {
+                    var p = parametrosCache.find(function (x) { return x.id === id; });
+                    if (p && navigator.clipboard) {
+                        navigator.clipboard.writeText(p.clave).then(
+                            function () { toast('Clave copiada.'); },
+                            function () { toast('No se pudo copiar.', { error: true }); }
+                        );
+                    }
                 }
-                return;
-            }
+            });
+        }
 
-            if (btn.dataset.act === 'delete') {
-                var variable = (tr.querySelector('.td-nombre') || {}).textContent || ('#' + id);
-                confirmMsg.textContent = '¿Eliminar el parámetro "' + variable.trim() + '"? Esta acción no se puede deshacer.';
-                pendingDeleteId = id;
-                confirmBox.classList.add('open');
-            }
-        });
+        var formBd = document.getElementById('formParametroBackdrop');
+        if (formBd) {
+            formBd.addEventListener('click', function (ev) {
+                if (ev.target === formBd || ev.target.closest('[data-act="close"]')) formBd.classList.remove('open');
+            });
+        }
+        var form = document.getElementById('formParametro');
+        if (form) form.addEventListener('submit', guardarParametro);
 
-        confirmBox.addEventListener('click', function (ev) {
-            if (ev.target === confirmBox || ev.target.closest('[data-act="cancel"]')) {
-                confirmBox.classList.remove('open');
-                pendingDeleteId = null;
-            }
-        });
-
-        btnDelete.addEventListener('click', async function () {
-            if (!pendingDeleteId) return;
-            btnDelete.disabled = true;
-            try {
-                await api('/api/parametros.php?id=' + pendingDeleteId, { method: 'DELETE' });
-                toast('Parámetro eliminado.');
-                confirmBox.classList.remove('open');
-                pendingDeleteId = null;
-                await cargarLista();
-            } catch (err) {
-                toast(err.message, true);
-            } finally {
-                btnDelete.disabled = false;
-            }
-        });
-
-        form.addEventListener('submit', async function (ev) {
-            ev.preventDefault();
-            formError.style.display = 'none';
-
-            var payload = {
-                variable:   document.getElementById('param-variable').value.trim(),
-                valor:      document.getElementById('param-valor').value.trim(),
-                comentario: document.getElementById('param-comentario').value.trim()
-            };
-
-            btnGuardar.disabled = true;
-            try {
-                if (modoEdicion) {
-                    await api('/api/parametros.php?id=' + encodeURIComponent(fId.value), {
-                        method: 'PUT',
-                        body:   payload
-                    });
-                    toast('Parámetro actualizado.');
-                } else {
-                    await api('/api/parametros.php', {
-                        method: 'POST',
-                        body:   payload
-                    });
-                    toast('Parámetro creado.');
+        var conf   = document.getElementById('parametrosConfirm');
+        var btnDel = document.getElementById('parametrosConfirmBtn');
+        if (conf) {
+            conf.addEventListener('click', function (ev) {
+                if (ev.target === conf || ev.target.closest('[data-act="cancel"]')) {
+                    conf.classList.remove('open');
+                    parametrosPendingDeleteId = null;
                 }
-                cerrarFormModal();
-                await cargarLista();
-            } catch (err) {
-                showFormError(err.message);
-            } finally {
-                btnGuardar.disabled = false;
-            }
-        });
+            });
+        }
+        if (btnDel) btnDel.addEventListener('click', confirmarEliminarParametro);
+
+        if (!wireConfigView._globalBound) {
+            wireConfigView._globalBound = true;
+            document.addEventListener('click', function (ev) {
+                var m = document.getElementById('parametrosCtxMenu');
+                if (m && m.classList.contains('open') && !m.contains(ev.target)) {
+                    cerrarMenuContextoParametros();
+                }
+            }, true);
+            window.addEventListener('scroll', cerrarMenuContextoParametros, true);
+            window.addEventListener('resize', cerrarMenuContextoParametros);
+            document.addEventListener('keydown', function (ev) {
+                if (ev.key !== 'Escape') return;
+                var mm = document.getElementById('parametrosCtxMenu');
+                if (mm && mm.classList.contains('open')) {
+                    cerrarMenuContextoParametros();
+                    ev.stopImmediatePropagation();
+                }
+            });
+        }
     }
 
     // -------- Vista: Explorador S3 (Herramientas) -------------------------
@@ -10148,7 +10251,7 @@
                 '<td class="td-id">#' + t.id + '</td>' +
                 '<td>' +
                     '<div style="font-weight:600">' + e(t.nombre) + '</div>' +
-                    '<div style="font-family:monospace;color:var(--muted);font-size:.78rem">' + e(t.script) + '</div>' +
+                    (t.descripcion ? '<div style="color:var(--muted);font-size:.78rem">' + e(t.descripcion) + '</div>' : '') +
                 '</td>' +
                 '<td style="font-family:monospace;font-size:.82rem">' + e(t.cron_expr) + '</td>' +
                 '<td>' + estado + '</td>' +

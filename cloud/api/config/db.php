@@ -62,3 +62,26 @@ function getConfigValue(string $clave, ?string $default = null): ?string
     }
     return $cache[$clave];
 }
+
+/**
+ * Lee un valor runtime de la tabla `parametros` (Herramientas → Editor de
+ * parámetros). Cachea por request. Si la clave no existe o su valor es NULL
+ * devuelve $default sin tirar. En cloud la columna de la clave se llama
+ * `variable` por compatibilidad histórica; la API expone `clave` como alias.
+ */
+function getParametro(string $clave, ?string $default = null): ?string
+{
+    static $cache = [];
+    if (array_key_exists($clave, $cache)) {
+        return $cache[$clave];
+    }
+    try {
+        $stmt = db()->prepare('SELECT valor FROM parametros WHERE variable = :variable LIMIT 1');
+        $stmt->execute([':variable' => $clave]);
+        $v = $stmt->fetchColumn();
+        $cache[$clave] = ($v === false || $v === null) ? $default : (string) $v;
+    } catch (Throwable $e) {
+        $cache[$clave] = $default;
+    }
+    return $cache[$clave];
+}

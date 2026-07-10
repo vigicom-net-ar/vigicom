@@ -80,7 +80,27 @@ try {
                 'detail' => 'La ejecución no está corriendo.'], 409);
         }
 
-        $pid   = (int) ($ej['pid'] ?? 0);
+        $pid     = (int) ($ej['pid'] ?? 0);
+        $mensaje = 'Detenido manualmente' . ($pid > 0 ? ' (pid ' . $pid . ')' : '');
+
+        // Marcamos la fila como 'killed' ANTES de mandar la señal.
+        // Cuando la señal llega al PHP hijo (vía el wrapper `timeout` de
+        // coreutils, que reenvía SIGTERM), el handler de _bootstrap.php
+        // llama a _cerrarEjecucion('timeout', ...), que se guarda con
+        // "if (estado !== 'corriendo') return;". Sin este pre-UPDATE
+        // el hijo gana la carrera y el registro queda como 'timeout'.
+        $upd = $pdo->prepare(
+            "UPDATE tareas_ejecuciones
+                SET fin = NOW(), estado = 'killed', exit_code = 143, mensaje = :m
+              WHERE id = :id AND estado = 'corriendo'"
+        );
+        $upd->execute([':m' => $mensaje, ':id' => $idBody]);
+
+        $updT = $pdo->prepare(
+            "UPDATE tareas SET ultimo_estado = 'killed', ultimo_error = :m WHERE id = :id"
+        );
+        $updT->execute([':m' => $mensaje, ':id' => $ej['tarea_id']]);
+
         $muerto = false;
         if ($pid > 0 && function_exists('posix_kill')) {
             @posix_kill($pid, 15);
@@ -95,19 +115,6 @@ try {
                 $muerto = true;
             }
         }
-
-        $mensaje = 'Detenido manualmente' . ($pid > 0 ? ' (pid ' . $pid . ')' : '');
-        $upd = $pdo->prepare(
-            "UPDATE tareas_ejecuciones
-                SET fin = NOW(), estado = 'killed', exit_code = 143, mensaje = :m
-              WHERE id = :id AND estado = 'corriendo'"
-        );
-        $upd->execute([':m' => $mensaje, ':id' => $idBody]);
-
-        $updT = $pdo->prepare(
-            "UPDATE tareas SET ultimo_estado = 'killed', ultimo_error = :m WHERE id = :id"
-        );
-        $updT->execute([':m' => $mensaje, ':id' => $ej['tarea_id']]);
 
         require_once dirname(__DIR__) . '/lib/sucesos.php';
         registrarSuceso($pdo, 'cron/tareas', 'alerta',
