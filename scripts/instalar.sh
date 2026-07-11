@@ -16,11 +16,15 @@
 #
 # Servicios:
 #   - vigicom-apache  PHP 8.2 + Apache en http://localhost:8090
-#   - vigicom-emqx    EMQX broker MQTT
+#   - vigicom-motor   Python worker MQTT
 #
 # DB:
 #   - `herramientas-mysql` (stack `herramientas`), accedido por los
 #     contenedores via host.docker.internal:3306, base `vigicom_dev`.
+#
+# EMQX:
+#   - Broker compartido en el stack `herramientas` (contenedor `emqx`,
+#     puertos default 1883/18083), accedido via host.docker.internal.
 #
 # Uso:
 #   bash ./scripts/instalar.sh
@@ -85,10 +89,12 @@ fi
 # --- Limpiar contenedores previos -------------------------------------------
 # El orden importa:
 #   1) `docker compose down` SIEMPRE primero (remueve contenedores con label
-#      compose). No usamos -v: el unico volumen que sobrevive es el de EMQX,
-#      que queremos preservar entre rebuilds.
+#      compose). No usamos -v: este compose ya no declara volumenes propios
+#      (EMQX salio al stack `herramientas`) pero se deja el flag negativo por
+#      si alguna vez se agregan.
 #   2) `docker rm -f` como fallback por si quedaron contenedores con esos
-#      nombres pero sin label de compose.
+#      nombres pero sin label de compose. Incluye `vigicom-emqx` (nombre
+#      historico) por si quedo dando vueltas de una instalacion vieja.
 echo -e "${RED}==> Limpiando contenedores previos...${NC}"
 
 docker compose -p "$PROJECT" down --remove-orphans > /dev/null 2>&1 || true
@@ -164,14 +170,19 @@ if ! $NO_INSTALL; then
 fi
 
 # --- Sembrar usuario MQTT en EMQX (idempotente, via API) --------------------
-# EMQX expone su dashboard API en localhost:18083 (mapeado por compose).
+# El broker es el contenedor `emqx` del stack `herramientas` (compartido con
+# reactor-dev). Dashboard API en localhost:18083 (puerto default).
 # El seeder hace POST -> si 409, PUT, asi que se puede reaplicar siempre.
+# OJO: en el primer boot del broker compartido, si EMQX_DASHBOARD_PASS de
+# este .env no matchea con la pass del broker, cae al fallback admin:public
+# y la cambia -- coordinar con reactor para que ambos .env.development
+# tengan el mismo EMQX_DASHBOARD_PASS.
 echo ""
 echo -e "${RED}==> Sembrando usuario MQTT en EMQX${NC}"
 if bash "$REPO_ROOT/scripts/lib/emqx_seed.sh" "$REPO_ROOT/.env.development"; then
     :
 else
-    echo -e "${YELLOW}    AVISO: el seeder de EMQX fallo -- revisa logs con: docker logs vigicom-emqx${NC}"
+    echo -e "${YELLOW}    AVISO: el seeder de EMQX fallo -- revisa logs con: docker logs emqx${NC}"
 fi
 
 # --- Resumen ----------------------------------------------------------------

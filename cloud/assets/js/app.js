@@ -1,4 +1,4 @@
-/**
+﻿/**
  * SPA de Vigicom Cloud.
  *
  * El shell (index.php) renderiza sidebar + topbar y delega el contenido
@@ -42,6 +42,7 @@
         '/cuentas':      { title: 'Plan de cuentas', render: renderCuentas },
         '/usuarios':     { title: 'Usuarios',      render: renderUsuarios },
         '/roles':        { title: 'Roles',         render: renderRoles },
+        '/permisos':     { title: 'Permisos',      render: renderPermisos },
         '/config':       { title: 'Herramientas',  render: renderConfig }
     };
 
@@ -1854,9 +1855,70 @@
         applyFilters();
     }
 
+    // -------- Helpers ABM: seguridad (usuarios / roles / permisos) --------
+
+    function toolbarSeguridadHtml(prefijo, placeholderBuscar, botonPrimarioTexto, filtrosActivos) {
+        var badge  = '<span class="btn-icon-badge"' + (filtrosActivos ? '' : ' style="display:none;"') + '>' + (filtrosActivos || '') + '</span>';
+        var activo = filtrosActivos ? ' active' : '';
+        return '<div class="toolbar">' +
+            '<div class="toolbar-left" style="gap:8px;flex-wrap:wrap;">' +
+                '<div class="search-wrap">' +
+                    '<input type="search" id="' + prefijo + 'Search" class="search-input" placeholder="' + placeholderBuscar + '">' +
+                    '<button class="search-clear" id="' + prefijo + 'SearchClear" type="button" style="display:none;">&times;</button>' +
+                '</div>' +
+                '<button class="btn btn-ghost btn-icon' + activo + '" id="' + prefijo + 'Filtros" type="button" title="Filtros">' +
+                    '<i class="fa-solid fa-filter"></i>' + badge +
+                '</button>' +
+                '<button class="btn btn-ghost btn-icon" id="' + prefijo + 'Refrescar" type="button" title="Refrescar">' +
+                    '<i class="fa-solid fa-rotate"></i>' +
+                '</button>' +
+            '</div>' +
+            '<div class="toolbar-right">' +
+                '<button class="btn btn-primary" id="' + prefijo + 'Nuevo" type="button">' + botonPrimarioTexto + '</button>' +
+            '</div>' +
+        '</div>';
+    }
+
+    function ctxMenuAbmHtml(id) {
+        return '<div id="' + id + '" class="ctx-menu" role="menu">' +
+            '<button type="button" data-action="consultar" role="menuitem">' +
+                '<i class="fa-solid fa-eye"></i><span>Consultar</span>' +
+            '</button>' +
+            '<div class="ctx-menu-sep"></div>' +
+            '<button type="button" data-action="editar" role="menuitem">' +
+                '<i class="fa-solid fa-pen"></i><span>Editar</span>' +
+            '</button>' +
+            '<button type="button" data-action="eliminar" class="ctx-menu-danger" role="menuitem">' +
+                '<i class="fa-solid fa-trash"></i><span>Eliminar</span>' +
+            '</button>' +
+        '</div>';
+    }
+
+    function abrirCtxMenuFlotante(ctxMenu, x, y) {
+        ctxMenu.classList.add('open');
+        var rect = ctxMenu.getBoundingClientRect();
+        var w = rect.width, h = rect.height;
+        var vw = window.innerWidth, vh = window.innerHeight;
+        var left = Math.min(x, vw - w - 8);
+        var top  = Math.min(y, vh - h - 8);
+        ctxMenu.style.left = Math.max(8, left) + 'px';
+        ctxMenu.style.top  = Math.max(8, top)  + 'px';
+    }
+
+    function conectarCierreCtxMenu(ctxMenu, cerrar) {
+        document.addEventListener('click', function (ev) {
+            if (ctxMenu.classList.contains('open') && !ctxMenu.contains(ev.target)) cerrar();
+        });
+        document.addEventListener('scroll',  function () { cerrar(); }, true);
+        window.addEventListener('resize',    function () { cerrar(); });
+        document.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Escape') cerrar();
+        });
+    }
+
     // -------- Vista: Usuarios ---------------------------------------------
 
-    var usuariosFiltros = {
+    var usuariosFiltrosDefault = {
         sort:      'id',
         dir:       'desc',
         limit:     100,
@@ -1868,6 +1930,10 @@
         roles:     '',
         estado:    ''
     };
+    var usuariosFiltros         = Object.assign({}, usuariosFiltrosDefault);
+    var usuariosFiltrosSnapshot = null;
+    var usuariosCache           = { comunidades: [] };
+    var usuariosRegistroCache   = {};
 
     function usuariosQueryString() {
         var qs = [];
@@ -1880,67 +1946,96 @@
         return qs.length ? ('?' + qs.join('&')) : '';
     }
 
-    async function renderUsuarios(view) {
-        var data        = await api('/api/usuarios.php' + usuariosQueryString());
-        var usuarios    = data.usuarios    || [];
-        var kpis        = data.kpis        || {};
-        var comunidades = data.comunidades || [];
+    function usuariosFiltrosActivos() {
+        var n = 0;
+        Object.keys(usuariosFiltrosDefault).forEach(function (k) {
+            if (k === 'sort' || k === 'dir' || k === 'limit') return;
+            if (String(usuariosFiltros[k]) !== String(usuariosFiltrosDefault[k])) n++;
+        });
+        return n;
+    }
 
-        var filtrosActivos = (usuariosFiltros.filtro_id !== '' ? 1 : 0) +
-                             (usuariosFiltros.nombre    !== '' ? 1 : 0) +
-                             (usuariosFiltros.correo    !== '' ? 1 : 0) +
-                             (usuariosFiltros.telefono  !== '' ? 1 : 0) +
-                             (usuariosFiltros.comunidad !== '' ? 1 : 0) +
-                             (usuariosFiltros.roles     !== '' ? 1 : 0) +
-                             (usuariosFiltros.estado    !== '' ? 1 : 0);
-        var badgeFiltros = filtrosActivos
-            ? ' <span class="badge badge-info" style="margin-left:6px;">' + filtrosActivos + '</span>'
-            : '';
+    function usuariosCountText(n) {
+        return 'Mostrando ' + n + ' resultado(s) (límite ' + usuariosFiltros.limit + ').';
+    }
+
+    function moduleHelpUsuariosHtml() {
+        return '<div class="module-help" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin-bottom:16px;box-shadow:var(--shadow);display:flex;gap:14px;align-items:center;">' +
+            '<div style="font-size:1.6rem;line-height:1;">👤</div>' +
+            '<div style="font-size:.88rem;color:var(--muted);line-height:1.45;">' +
+                'Los usuarios son las personas con acceso al panel de Vigicom, con sus credenciales, datos de contacto y rol asignado que define qué acciones pueden ejecutar.' +
+            '</div>' +
+        '</div>';
+    }
+
+    function renderUsuariosStats(kpis) {
+        return statCard('Total',     kpis.total     || 0, 'orange', 'Usuarios registrados') +
+               statCard('Activos',   kpis.activos   || 0, 'green',  'Pueden iniciar sesión') +
+               statCard('Inactivos', kpis.inactivos || 0, 'red',    'Sin acceso');
+    }
+
+    async function recargarUsuariosLista() {
+        try {
+            var data     = await api('/api/usuarios.php' + usuariosQueryString());
+            var usuarios = data.usuarios    || [];
+            var kpis     = data.kpis        || {};
+            usuariosCache.comunidades = data.comunidades || [];
+            usuariosRegistroCache = {};
+            var stats = document.getElementById('usrStats');
+            var tbody = document.getElementById('usrTbody');
+            var count = document.getElementById('usrCount');
+            if (stats) stats.innerHTML = renderUsuariosStats(kpis);
+            if (tbody) tbody.innerHTML = renderFilasUsuarios(usuarios);
+            if (count) count.textContent = usuariosCountText(usuarios.length);
+            var btn = document.getElementById('usrFiltros');
+            if (btn) {
+                var n = usuariosFiltrosActivos();
+                var badge = btn.querySelector('.btn-icon-badge');
+                btn.classList.toggle('active', n > 0);
+                if (badge) {
+                    badge.textContent = n || '';
+                    badge.style.display = n ? '' : 'none';
+                }
+            }
+            var searchInput = document.getElementById('usrSearch');
+            if (searchInput) searchInput.dispatchEvent(new Event('input'));
+        } catch (err) {
+            toast(err.message, true);
+        }
+    }
+
+    async function renderUsuarios(view) {
+        var data     = await api('/api/usuarios.php' + usuariosQueryString());
+        var usuarios = data.usuarios    || [];
+        var kpis     = data.kpis        || {};
+        usuariosCache.comunidades = data.comunidades || [];
+        usuariosRegistroCache = {};
 
         view.innerHTML =
-            '<div class="page-header"><div>' +
-                '<h1>Usuarios</h1>' +
-                '<p>Cuentas con acceso al panel de Vigicom.</p>' +
-            '</div></div>' +
+            moduleHelpUsuariosHtml() +
 
-            '<div class="stats-bar">' +
-                statCard('Total',     kpis.total     || 0, 'orange', 'Usuarios registrados') +
-                statCard('Activos',   kpis.activos   || 0, 'green',  'Pueden iniciar sesión') +
-                statCard('Inactivos', kpis.inactivos || 0, 'red',    'Sin acceso') +
-            '</div>' +
+            '<div class="stats-bar" id="usrStats">' + renderUsuariosStats(kpis) + '</div>' +
 
-            '<div class="toolbar">' +
-                '<div class="toolbar-left">' +
-                    '<div class="search-wrap">' +
-                        '<input type="search" id="usrSearch" class="search-input" placeholder="Buscar nombre, correo, DNI...">' +
-                        '<button class="search-clear" id="usrSearchClear" type="button" style="display:none;">&times;</button>' +
-                    '</div>' +
-                    '<button class="btn btn-secondary" id="usrFiltros" type="button">' +
-                        '<i class="fa-solid fa-filter"></i> Filtros' + badgeFiltros +
-                    '</button>' +
-                '</div>' +
-                '<div class="toolbar-right">' +
-                    '<button class="btn btn-primary" id="usrNuevo" type="button">+ Nuevo usuario</button>' +
-                '</div>' +
-            '</div>' +
+            toolbarSeguridadHtml('usr', '🔍 Buscar nombre, correo, DNI o teléfono…', '+ Nuevo usuario', usuariosFiltrosActivos()) +
 
             '<div class="table-card">' +
                 '<table><thead><tr>' +
                     '<th>Código</th><th>Nombre</th><th>Contacto</th><th>Comunidad</th><th>Rol</th><th>Estado</th>' +
-                    '<th style="text-align:right;">Acciones</th>' +
+                    '<th style="text-align:center;">Acciones</th>' +
                 '</tr></thead><tbody id="usrTbody">' +
                 renderFilasUsuarios(usuarios) +
                 '</tbody></table>' +
                 '<div class="table-empty" id="usrEmpty" style="display:none;">No hay usuarios que coincidan con la búsqueda.</div>' +
             '</div>' +
-            '<div class="text-muted text-sm" style="margin-top:10px;">' +
-                'Mostrando ' + usuarios.length + ' resultado(s) (límite ' + usuariosFiltros.limit + ').' +
+            '<div class="text-muted text-sm" id="usrCount" style="margin-top:10px;">' +
+                usuariosCountText(usuarios.length) +
             '</div>' +
 
-            modalUsuarioHtml(comunidades) +
+            modalUsuarioHtml(usuariosCache.comunidades) +
             modalConsultarUsuarioHtml() +
-            modalFiltrosHtml(comunidades) +
-            confirmDeleteHtml();
+            modalFiltrosUsuariosHtml(usuariosCache.comunidades) +
+            confirmDeleteUsuarioHtml() +
+            ctxMenuAbmHtml('usrCtxMenu');
 
         wireUsuariosView();
     }
@@ -1952,7 +2047,7 @@
         return usuarios.map(function (u) {
             var estado = parseInt(u.estado, 10) === 1 ? 1 : 0;
             var busq   = String((u.nombre || '') + ' ' + (u.correo || '') + ' ' + (u.dni || '') + ' ' + (u.telefono || '')).toLowerCase().trim();
-            return '<tr data-id="' + u.id + '" data-estado="' + estado + '" data-search="' + e(busq) + '">' +
+            return '<tr data-id="' + u.id + '" data-estado="' + estado + '" data-search="' + e(busq) + '" style="cursor:pointer;">' +
                 '<td class="td-id">#' + u.id + '</td>' +
                 '<td>' +
                     '<div class="td-nombre">' + e(u.nombre || '—') + '</div>' +
@@ -1969,11 +2064,11 @@
                         ? '<span class="badge badge-success">Activo</span>'
                         : '<span class="badge badge-danger">Inactivo</span>') +
                 '</td>' +
-                '<td>' +
-                    '<div class="actions" style="justify-content:flex-end;">' +
-                        '<button class="btn-icon-sm" data-act="view"   type="button" title="Consultar"><i class="fa-solid fa-eye"></i></button>' +
-                        '<button class="btn-icon-sm" data-act="edit"   type="button" title="Editar"><i class="fa-solid fa-pencil"></i></button>' +
-                        '<button class="btn-icon-sm" data-act="delete" type="button" title="Eliminar"><i class="fa-solid fa-trash"></i></button>' +
+                '<td style="text-align:center;">' +
+                    '<div class="actions" style="justify-content:center;">' +
+                        '<button class="btn-icon-sm" data-act="menu" type="button" title="Más acciones">' +
+                            '<i class="fa-solid fa-bars"></i>' +
+                        '</button>' +
                     '</div>' +
                 '</td>' +
             '</tr>';
@@ -2044,83 +2139,71 @@
         '</div></div>';
     }
 
-    function modalFiltrosHtml(comunidades) {
+    function modalFiltrosUsuariosHtml(comunidades) {
         var optsCom = comunidades.map(function (c) {
-            var sel = String(usuariosFiltros.comunidad) === String(c.id) ? ' selected' : '';
-            return '<option value="' + c.id + '"' + sel + '>' + e(c.nombre) + '</option>';
+            return '<option value="' + c.id + '">' + e(c.nombre) + '</option>';
         }).join('');
-        function selOpt(value, label, current) {
-            var sel = String(current) === String(value) ? ' selected' : '';
-            return '<option value="' + e(value) + '"' + sel + '>' + e(label) + '</option>';
-        }
 
-        return '<div class="modal-backdrop" id="usrFiltrosModal"><div class="modal">' +
+        return '<div class="modal-backdrop" id="usrFiltrosModal"><div class="modal" style="max-width:560px;">' +
             '<div class="modal-header">' +
-                '<div class="modal-title"><span>Filtros</span></div>' +
-                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+                '<div class="modal-title"><i class="fa-solid fa-filter"></i> Filtros</div>' +
+                '<button class="btn btn-ghost" data-act="cerrar" type="button" title="Cerrar">&times;</button>' +
             '</div>' +
-            '<form id="usrFiltrosForm" novalidate>' +
-                '<div class="modal-body">' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="flt-id">Código</label>' +
-                            '<input id="flt-id" type="number" min="1" step="1" inputmode="numeric" ' +
-                                'placeholder="Código del registro" value="' + e(usuariosFiltros.filtro_id) + '"></div>' +
-                        '<div class="form-group"><label for="flt-nombre">Nombre</label>' +
-                            '<input id="flt-nombre" type="text" maxlength="255" ' +
-                                'placeholder="Nombre del usuario" value="' + e(usuariosFiltros.nombre) + '"></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="flt-correo">Correo</label>' +
-                            '<input id="flt-correo" type="search" maxlength="100" ' +
-                                'placeholder="ejemplo@correo.com" value="' + e(usuariosFiltros.correo) + '"></div>' +
-                        '<div class="form-group"><label for="flt-telefono">Celular</label>' +
-                            '<input id="flt-telefono" type="tel" maxlength="20" ' +
-                                'placeholder="Número de celular" value="' + e(usuariosFiltros.telefono) + '"></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="flt-comunidad">Comunidad</label>' +
-                            '<select id="flt-comunidad"><option value="">Todas</option>' + optsCom + '</select></div>' +
-                        '<div class="form-group"><label for="flt-roles">Rol</label>' +
-                            '<select id="flt-roles">' +
-                                selOpt('',         'Todos',    usuariosFiltros.roles) +
-                                selOpt('admin',    'admin',    usuariosFiltros.roles) +
-                                selOpt('operador', 'operador', usuariosFiltros.roles) +
-                                selOpt('vecino',   'vecino',   usuariosFiltros.roles) +
-                            '</select></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="flt-estado">Estado</label>' +
-                            '<select id="flt-estado">' +
-                                selOpt('',  'Todos',     usuariosFiltros.estado) +
-                                selOpt('1', 'Activos',   usuariosFiltros.estado) +
-                                selOpt('0', 'Inactivos', usuariosFiltros.estado) +
-                            '</select></div>' +
-                        '<div class="form-group"><label for="flt-limit">Límite</label>' +
-                            '<input id="flt-limit" type="number" min="1" max="1000" step="1" ' +
-                                'inputmode="numeric" value="' + e(usuariosFiltros.limit) + '"></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="flt-sort">Ordenar por</label>' +
-                            '<select id="flt-sort">' +
-                                selOpt('id',         'Código',            usuariosFiltros.sort) +
-                                selOpt('nombre',     'Nombre',            usuariosFiltros.sort) +
-                                selOpt('correo',     'Correo',            usuariosFiltros.sort) +
-                                selOpt('registrado', 'Fecha de registro', usuariosFiltros.sort) +
-                                selOpt('estado',     'Estado',            usuariosFiltros.sort) +
-                            '</select></div>' +
-                        '<div class="form-group"><label for="flt-dir">Dirección</label>' +
-                            '<select id="flt-dir">' +
-                                selOpt('desc', 'Descendente', usuariosFiltros.dir) +
-                                selOpt('asc',  'Ascendente',  usuariosFiltros.dir) +
-                            '</select></div>' +
+            '<div class="modal-body">' +
+                '<div class="form-row">' +
+                    '<div class="form-group"><label for="uflt-id">Código</label>' +
+                        '<input id="uflt-id" type="number" min="1" step="1" inputmode="numeric" placeholder="ID del usuario…"></div>' +
+                    '<div class="form-group"><label for="uflt-nombre">Nombre</label>' +
+                        '<input id="uflt-nombre" type="text" maxlength="255" placeholder="Nombre del usuario…"></div>' +
+                '</div>' +
+                '<div class="form-row">' +
+                    '<div class="form-group"><label for="uflt-correo">Correo</label>' +
+                        '<input id="uflt-correo" type="search" maxlength="100" placeholder="ejemplo@correo.com"></div>' +
+                    '<div class="form-group"><label for="uflt-telefono">Celular</label>' +
+                        '<input id="uflt-telefono" type="tel" maxlength="20" placeholder="Número de celular"></div>' +
+                '</div>' +
+                '<div class="form-row">' +
+                    '<div class="form-group"><label for="uflt-comunidad">Comunidad</label>' +
+                        '<select id="uflt-comunidad"><option value="">Todas</option>' + optsCom + '</select></div>' +
+                    '<div class="form-group"><label for="uflt-roles">Rol</label>' +
+                        '<select id="uflt-roles">' +
+                            '<option value="">Todos</option>' +
+                            '<option value="admin">admin</option>' +
+                            '<option value="operador">operador</option>' +
+                            '<option value="vecino">vecino</option>' +
+                        '</select></div>' +
+                '</div>' +
+                '<div class="form-group">' +
+                    '<label>Estado del registro</label>' +
+                    '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+                        '<button type="button" class="filter-chip" data-chip="estado" data-value="" >Todos</button>' +
+                        '<button type="button" class="filter-chip" data-chip="estado" data-value="1">Activos</button>' +
+                        '<button type="button" class="filter-chip" data-chip="estado" data-value="0">Inactivos</button>' +
                     '</div>' +
                 '</div>' +
-                '<div class="modal-footer">' +
-                    '<button type="button" class="btn btn-ghost"     id="usrFiltrosReset" >Limpiar</button>' +
-                    '<button type="button" class="btn btn-secondary" data-act="close"    >Cancelar</button>' +
-                    '<button type="submit"  class="btn btn-primary"                       >Aplicar</button>' +
+                '<div class="form-row form-row-3">' +
+                    '<div class="form-group"><label for="uflt-limit">Límite</label>' +
+                        '<input id="uflt-limit" type="number" min="1" max="1000" step="1" inputmode="numeric"></div>' +
+                    '<div class="form-group"><label for="uflt-sort">Ordenar por</label>' +
+                        '<select id="uflt-sort">' +
+                            '<option value="id">Código</option>' +
+                            '<option value="nombre">Nombre</option>' +
+                            '<option value="correo">Correo</option>' +
+                            '<option value="registrado">Fecha de registro</option>' +
+                            '<option value="estado">Estado</option>' +
+                        '</select></div>' +
+                    '<div class="form-group"><label for="uflt-dir">Dirección</label>' +
+                        '<select id="uflt-dir">' +
+                            '<option value="desc">Descendente</option>' +
+                            '<option value="asc">Ascendente</option>' +
+                        '</select></div>' +
                 '</div>' +
-            '</form>' +
+            '</div>' +
+            '<div class="modal-footer">' +
+                '<button type="button" class="btn btn-ghost"   data-act="cerrar"  >Cerrar</button>' +
+                '<button type="button" class="btn btn-ghost"   data-act="limpiar" >Limpiar</button>' +
+                '<button type="button" class="btn btn-primary" data-act="aplicar" >Aplicar</button>' +
+            '</div>' +
         '</div></div>';
     }
 
@@ -2138,11 +2221,14 @@
             '</div>' +
             '<div class="modal-footer">' +
                 '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+                '<button type="button" class="btn btn-primary" id="usrConsultarEditar">' +
+                    '<i class="fa-solid fa-pen"></i> Editar' +
+                '</button>' +
             '</div>' +
         '</div></div>';
     }
 
-    function confirmDeleteHtml() {
+    function confirmDeleteUsuarioHtml() {
         return '<div class="confirm-backdrop" id="usrConfirm"><div class="confirm-box">' +
             '<div class="confirm-title">Eliminar usuario</div>' +
             '<div class="confirm-msg" id="usrConfirmMsg">Esta acción no se puede deshacer.</div>' +
@@ -2170,21 +2256,26 @@
         var hintPass    = document.getElementById('usrHintPass');
         var btnGuardar  = document.getElementById('usrGuardar');
 
-        var confirmBox  = document.getElementById('usrConfirm');
-        var confirmMsg  = document.getElementById('usrConfirmMsg');
-        var btnDelete   = document.getElementById('usrConfirmBtn');
+        var confirmBox = document.getElementById('usrConfirm');
+        var confirmMsg = document.getElementById('usrConfirmMsg');
+        var btnDelete  = document.getElementById('usrConfirmBtn');
 
         var filtrosModal = document.getElementById('usrFiltrosModal');
-        var filtrosForm  = document.getElementById('usrFiltrosForm');
 
-        var consultarModal = document.getElementById('usrConsultar');
-        var consultarSub   = document.getElementById('usrConsultarSub');
-        var consultarBody  = document.getElementById('usrConsultarBody');
+        var consultarModal  = document.getElementById('usrConsultar');
+        var consultarSub    = document.getElementById('usrConsultarSub');
+        var consultarBody   = document.getElementById('usrConsultarBody');
+        var consultarEditar = document.getElementById('usrConsultarEditar');
 
-        var pendingDeleteId = null;
-        var modoEdicion     = false;
+        var ctxMenu = document.getElementById('usrCtxMenu');
+        var ctxId   = null;
 
-        function applyFilters() {
+        var pendingDeleteId   = null;
+        var modoEdicion       = false;
+        var consultarIdActual = null;
+
+        // --- Búsqueda rápida cliente ----------------------------------------
+        function applyClientFilter() {
             var q = searchInput.value.trim().toLowerCase();
             var visibles = 0;
             tbody.querySelectorAll('tr[data-id]').forEach(function (tr) {
@@ -2196,52 +2287,203 @@
             emptyState.style.display = (visibles === 0 && tbody.querySelector('tr[data-id]')) ? '' : 'none';
             searchClear.style.display = q ? '' : 'none';
         }
-
-        searchInput.addEventListener('input', applyFilters);
+        searchInput.addEventListener('input', applyClientFilter);
         searchClear.addEventListener('click', function () {
             searchInput.value = '';
-            applyFilters();
+            applyClientFilter();
             searchInput.focus();
         });
 
-        document.getElementById('usrFiltros').addEventListener('click', function () {
-            filtrosModal.classList.add('open');
-        });
-        filtrosModal.addEventListener('click', function (ev) {
-            if (ev.target === filtrosModal || ev.target.closest('[data-act="close"]')) {
-                filtrosModal.classList.remove('open');
-            }
-        });
-        document.getElementById('usrFiltrosReset').addEventListener('click', function () {
-            usuariosFiltros.sort      = 'id';
-            usuariosFiltros.dir       = 'desc';
-            usuariosFiltros.limit     = 100;
-            usuariosFiltros.filtro_id = '';
-            usuariosFiltros.nombre    = '';
-            usuariosFiltros.correo    = '';
-            usuariosFiltros.telefono  = '';
-            usuariosFiltros.comunidad = '';
-            usuariosFiltros.roles     = '';
-            usuariosFiltros.estado    = '';
-            filtrosModal.classList.remove('open');
-            navigate();
-        });
-        filtrosForm.addEventListener('submit', function (ev) {
-            ev.preventDefault();
-            usuariosFiltros.filtro_id = document.getElementById('flt-id').value.trim();
-            usuariosFiltros.nombre    = document.getElementById('flt-nombre').value.trim();
-            usuariosFiltros.correo    = document.getElementById('flt-correo').value.trim();
-            usuariosFiltros.telefono  = document.getElementById('flt-telefono').value.trim();
-            usuariosFiltros.comunidad = document.getElementById('flt-comunidad').value;
-            usuariosFiltros.roles     = document.getElementById('flt-roles').value;
-            usuariosFiltros.estado    = document.getElementById('flt-estado').value;
-            usuariosFiltros.limit     = parseInt(document.getElementById('flt-limit').value, 10) || 100;
-            usuariosFiltros.sort      = document.getElementById('flt-sort').value || 'id';
-            usuariosFiltros.dir       = document.getElementById('flt-dir').value  || 'desc';
-            filtrosModal.classList.remove('open');
-            navigate();
+        // --- Refrescar -----------------------------------------------------
+        document.getElementById('usrRefrescar').addEventListener('click', function () {
+            recargarUsuariosLista();
         });
 
+        // --- Modal de filtros (live apply + snapshot) ----------------------
+        var fFltId    = document.getElementById('uflt-id');
+        var fFltNom   = document.getElementById('uflt-nombre');
+        var fFltCor   = document.getElementById('uflt-correo');
+        var fFltTel   = document.getElementById('uflt-telefono');
+        var fFltCom   = document.getElementById('uflt-comunidad');
+        var fFltRol   = document.getElementById('uflt-roles');
+        var fFltLim   = document.getElementById('uflt-limit');
+        var fFltSort  = document.getElementById('uflt-sort');
+        var fFltDir   = document.getElementById('uflt-dir');
+        var fChipsEst = filtrosModal.querySelectorAll('.filter-chip[data-chip="estado"]');
+
+        function sincronizarFiltros() {
+            fFltId.value  = usuariosFiltros.filtro_id;
+            fFltNom.value = usuariosFiltros.nombre;
+            fFltCor.value = usuariosFiltros.correo;
+            fFltTel.value = usuariosFiltros.telefono;
+            fFltCom.value = usuariosFiltros.comunidad;
+            fFltRol.value = usuariosFiltros.roles;
+            fFltLim.value = usuariosFiltros.limit;
+            fFltSort.value = usuariosFiltros.sort;
+            fFltDir.value  = usuariosFiltros.dir;
+            fChipsEst.forEach(function (c) {
+                c.classList.toggle('active', c.dataset.value === String(usuariosFiltros.estado || ''));
+            });
+        }
+        function abrirModalFiltros() {
+            usuariosFiltrosSnapshot = Object.assign({}, usuariosFiltros);
+            sincronizarFiltros();
+            filtrosModal.classList.add('open');
+        }
+        function cerrarModalFiltros() { filtrosModal.classList.remove('open'); }
+        function cancelarFiltros() {
+            if (usuariosFiltrosSnapshot) {
+                Object.keys(usuariosFiltrosSnapshot).forEach(function (k) {
+                    usuariosFiltros[k] = usuariosFiltrosSnapshot[k];
+                });
+                usuariosFiltrosSnapshot = null;
+                recargarUsuariosLista();
+            }
+            cerrarModalFiltros();
+        }
+        function limpiarFiltros() {
+            Object.assign(usuariosFiltros, usuariosFiltrosDefault);
+            sincronizarFiltros();
+            recargarUsuariosLista();
+        }
+
+        document.getElementById('usrFiltros').addEventListener('click', abrirModalFiltros);
+        filtrosModal.addEventListener('click', function (ev) {
+            if (ev.target === filtrosModal) { cancelarFiltros(); return; }
+            var b = ev.target.closest('button[data-act]');
+            if (!b) return;
+            if (b.dataset.act === 'cerrar')  cancelarFiltros();
+            if (b.dataset.act === 'limpiar') limpiarFiltros();
+            if (b.dataset.act === 'aplicar') { usuariosFiltrosSnapshot = null; cerrarModalFiltros(); }
+        });
+
+        function liveApply(field, valueGetter) {
+            return function () {
+                usuariosFiltros[field] = valueGetter();
+                recargarUsuariosLista();
+            };
+        }
+        fFltId.addEventListener('input',   liveApply('filtro_id', function () { return fFltId.value.trim(); }));
+        fFltNom.addEventListener('input',  liveApply('nombre',    function () { return fFltNom.value.trim(); }));
+        fFltCor.addEventListener('input',  liveApply('correo',    function () { return fFltCor.value.trim(); }));
+        fFltTel.addEventListener('input',  liveApply('telefono',  function () { return fFltTel.value.trim(); }));
+        fFltCom.addEventListener('change', liveApply('comunidad', function () { return fFltCom.value; }));
+        fFltRol.addEventListener('change', liveApply('roles',     function () { return fFltRol.value; }));
+        fFltLim.addEventListener('change', liveApply('limit',     function () { return parseInt(fFltLim.value, 10) || 100; }));
+        fFltSort.addEventListener('change', liveApply('sort',     function () { return fFltSort.value || 'id'; }));
+        fFltDir.addEventListener('change',  liveApply('dir',      function () { return fFltDir.value  || 'desc'; }));
+        fChipsEst.forEach(function (chip) {
+            chip.addEventListener('click', function () {
+                usuariosFiltros.estado = chip.dataset.value;
+                fChipsEst.forEach(function (c) { c.classList.toggle('active', c === chip); });
+                recargarUsuariosLista();
+            });
+        });
+
+        // --- Menú contextual de fila ---------------------------------------
+        function cerrarCtxMenu() {
+            ctxMenu.classList.remove('open');
+            ctxId = null;
+        }
+        ctxMenu.addEventListener('click', function (ev) {
+            var b = ev.target.closest('button[data-action]');
+            if (!b || ctxId == null) return;
+            var id = ctxId;
+            cerrarCtxMenu();
+            if (b.dataset.action === 'consultar')     abrirConsulta(id);
+            else if (b.dataset.action === 'editar')   abrirEdicion(id);
+            else if (b.dataset.action === 'eliminar') pedirEliminar(id);
+        });
+        conectarCierreCtxMenu(ctxMenu, cerrarCtxMenu);
+
+        // --- Filas: clic = Consultar, click derecho = ctx menu -------------
+        tbody.addEventListener('click', function (ev) {
+            var tr = ev.target.closest('tr[data-id]');
+            if (!tr) return;
+            var id = parseInt(tr.dataset.id, 10);
+            var btn = ev.target.closest('button[data-act="menu"]');
+            if (btn) {
+                ev.stopPropagation();
+                var rect = btn.getBoundingClientRect();
+                abrirCtxMenuFlotante(ctxMenu, rect.right - 200, rect.bottom + 4);
+                ctxId = id;
+                return;
+            }
+            if (ev.target.closest('a,input,select,button')) return;
+            abrirConsulta(id);
+        });
+        tbody.addEventListener('contextmenu', function (ev) {
+            var tr = ev.target.closest('tr[data-id]');
+            if (!tr) return;
+            ev.preventDefault();
+            var id = parseInt(tr.dataset.id, 10);
+            abrirCtxMenuFlotante(ctxMenu, ev.clientX, ev.clientY);
+            ctxId = id;
+        });
+
+        // --- Modal Consultar ----------------------------------------------
+        consultarModal.addEventListener('click', function (ev) {
+            if (ev.target === consultarModal || ev.target.closest('[data-act="close"]')) {
+                consultarModal.classList.remove('open');
+            }
+        });
+        consultarEditar.addEventListener('click', function () {
+            if (consultarIdActual == null) return;
+            consultarModal.classList.remove('open');
+            abrirEdicion(consultarIdActual);
+        });
+
+        async function abrirConsulta(id) {
+            consultarIdActual = id;
+            consultarSub.innerHTML  = '<code>#' + id + '</code>';
+            consultarBody.innerHTML = '<div style="display:flex;justify-content:center;padding:24px"><div class="spin"></div></div>';
+            consultarModal.classList.add('open');
+
+            var u;
+            try {
+                u = usuariosRegistroCache[id] || (usuariosRegistroCache[id] = await api('/api/usuarios.php?id=' + id));
+            } catch (err) {
+                consultarBody.innerHTML = '<div class="alert alert-error">' + e(err.message) + '</div>';
+                return;
+            }
+
+            var estadoBadge = parseInt(u.estado, 10) === 1
+                ? '<span class="badge badge-success">Activo</span>'
+                : '<span class="badge badge-danger">Inactivo</span>';
+            var nacimiento = u.nacimiento ? String(u.nacimiento).slice(0, 10) : null;
+
+            consultarSub.innerHTML  = '<code>#' + u.id + '</code>';
+            consultarBody.innerHTML =
+                abmRow    ('Código',                 '<code>#' + u.id + '</code>') +
+                abmRow    ('Estado',                 estadoBadge) +
+                abmRowTxt ('Nombre',                 u.nombre,               'Sin nombre',    true) +
+                abmRowTxt ('Correo',                 u.correo,               'Sin correo') +
+                abmRowTxt ('Teléfono',               u.telefono,             'Sin teléfono') +
+                abmRowTxt ('DNI',                    u.dni,                  'Sin DNI') +
+                abmRowTxt ('Género',                 u.genero,               'Sin género') +
+                abmRowTxt ('Fecha de nacimiento',    nacimiento,             'Sin fecha') +
+                abmRowRef ('Comunidad',              u.comunidad,  u.comunidad_nombre, 'Sin comunidad') +
+                abmRowRef ('Casa',                   u.casa,       u.casa_nombre,      'Sin casa') +
+                abmRowTxt ('Rol',                    u.roles,                'Sin rol') +
+                abmRowTxt ('Aplicación',             u.aplicacion,           'Sin app') +
+                abmRowSiNo('Usuario de sistema',     u.sistema) +
+                abmRowTxt ('Instalada',              abmFecha(u.instalada),           'Sin instalación') +
+                abmRowTxt ('Última ejecución',       abmFecha(u.ejecutada),           'Sin ejecución') +
+                abmRowTxt ('Coordenadas',            u.ubicacionCoordenadas,          'Sin coordenadas') +
+                abmRowTxt ('Exactitud',              u.ubicacionExactitud,            'Sin exactitud') +
+                abmRowTxt ('Ubicación actualizada',  abmFecha(u.ubicacionActualizada),'Sin ubicación') +
+                abmRowSiNo('Avisos',                 u.avisos) +
+                abmRowSiNo('Notificaciones',         u.notificaciones) +
+                abmRowSiNo('WhatsApps',              u.whatsapps) +
+                abmRowSiNo('Mensajes',               u.mensajes) +
+                abmRowSiNo('Correos',                u.correos) +
+                abmRowTxt ('Terminal',               u.terminal != null ? '#' + u.terminal : null, 'Sin terminal') +
+                abmRowTxt ('Fecha de registro',      abmFecha(u.registrado),          'Sin registro') +
+                abmRowRef ('Registrado por',         u.registrante, u.registrante_nombre, 'Sin registrante') +
+                abmRowTxt ('Propiedades',            u.propiedades,          'Sin propiedades', true);
+        }
+
+        // --- Modal Alta / Edición -----------------------------------------
         function setEstadoLabel() {
             estadoLabel.textContent = fEstado.checked ? 'Activo' : 'Inactivo';
         }
@@ -2268,91 +2510,6 @@
             if (ev.target === modal || ev.target.closest('[data-act="close"]')) closeModal();
         });
 
-        consultarModal.addEventListener('click', function (ev) {
-            if (ev.target === consultarModal || ev.target.closest('[data-act="close"]')) {
-                consultarModal.classList.remove('open');
-            }
-        });
-
-        function dataRow(label, value, muted, full) {
-            var rowCls = 'data-row' + (full ? ' data-row-full' : '');
-            var valCls = 'data-value' + (muted ? ' muted' : '');
-            return '<div class="' + rowCls + '">' +
-                '<dt class="data-label">' + e(label) + '</dt>' +
-                '<dd class="' + valCls + '">' + value + '</dd>' +
-            '</div>';
-        }
-        function fmtFecha(v) {
-            if (!v) return null;
-            return String(v).replace('T', ' ').replace(/\.\d+$/, '');
-        }
-        function fmtSiNo(v) {
-            if (v == null || v === '') return null;
-            var s = String(v);
-            return (s === '1' || s.toLowerCase() === 'si' || s.toLowerCase() === 'sí') ? 'Sí' : 'No';
-        }
-        function rowTxt(label, v, vacio, full) {
-            var muted = v == null || v === '';
-            return dataRow(label, e(muted ? (vacio || '—') : v), muted, full);
-        }
-        function rowRef(label, id, nombre, vacio, full) {
-            if (id == null || id === '') return dataRow(label, e(vacio || '—'), true, full);
-            var txt = nombre ? (nombre + ' (#' + id + ')') : ('#' + id);
-            return dataRow(label, e(txt), false, full);
-        }
-        function rowSiNo(label, v, full) {
-            var t = fmtSiNo(v);
-            return dataRow(label, e(t || 'No definido'), t == null, full);
-        }
-        async function abrirConsulta(id) {
-            consultarSub.innerHTML  = '<code>#' + id + '</code>';
-            consultarBody.innerHTML = '<div style="display:flex;justify-content:center;padding:24px"><div class="spin"></div></div>';
-            consultarModal.classList.add('open');
-
-            var u;
-            try {
-                u = await api('/api/usuarios.php?id=' + id);
-            } catch (err) {
-                consultarBody.innerHTML = '<div class="alert alert-error">' + e(err.message) + '</div>';
-                return;
-            }
-
-            var estadoBadge = parseInt(u.estado, 10) === 1
-                ? '<span class="badge badge-success">Activo</span>'
-                : '<span class="badge badge-danger">Inactivo</span>';
-            var nacimiento = u.nacimiento ? String(u.nacimiento).slice(0, 10) : null;
-
-            consultarSub.innerHTML  = '<code>#' + u.id + '</code>';
-            consultarBody.innerHTML =
-                dataRow('Código',                 '<code>#' + u.id + '</code>') +
-                rowTxt ('Nombre',                  u.nombre) +
-                rowTxt ('Correo',                  u.correo) +
-                rowTxt ('Teléfono',                u.telefono, 'Sin teléfono') +
-                rowTxt ('DNI',                     u.dni,      'Sin DNI') +
-                rowTxt ('Género',                  u.genero,   'Sin género') +
-                rowTxt ('Fecha de nacimiento',     nacimiento, 'Sin fecha') +
-                rowRef ('Comunidad',               u.comunidad, u.comunidad_nombre, 'Sin comunidad') +
-                rowRef ('Casa',                    u.casa,      u.casa_nombre,      'Sin casa') +
-                rowTxt ('Rol',                     u.roles,    'Sin rol') +
-                dataRow('Estado',                  estadoBadge) +
-                rowTxt ('Aplicación',              u.aplicacion,   'Sin app') +
-                rowSiNo('Usuario de sistema',      u.sistema) +
-                rowTxt ('Instalada',               fmtFecha(u.instalada),  'Sin instalación') +
-                rowTxt ('Última ejecución',        fmtFecha(u.ejecutada),  'Sin ejecución') +
-                rowTxt ('Coordenadas',             u.ubicacionCoordenadas, 'Sin coordenadas') +
-                rowTxt ('Exactitud',               u.ubicacionExactitud,   'Sin exactitud') +
-                rowTxt ('Ubicación actualizada',   fmtFecha(u.ubicacionActualizada), 'Sin ubicación') +
-                rowSiNo('Avisos',                  u.avisos) +
-                rowSiNo('Notificaciones',          u.notificaciones) +
-                rowSiNo('WhatsApps',               u.whatsapps) +
-                rowSiNo('Mensajes',                u.mensajes) +
-                rowSiNo('Correos',                 u.correos) +
-                rowTxt ('Terminal',                u.terminal != null ? '#' + u.terminal : null, 'Sin terminal') +
-                rowTxt ('Fecha de registro',       fmtFecha(u.registrado), 'Sin registro') +
-                rowRef ('Registrado por',          u.registrante, u.registrante_nombre, 'Sin registrante') +
-                rowTxt ('Propiedades',             u.propiedades, 'Sin propiedades', true);
-        }
-
         document.getElementById('usrNuevo').addEventListener('click', function () {
             modoEdicion = false;
             resetForm();
@@ -2364,71 +2521,59 @@
             document.getElementById('usr-nombre').focus();
         });
 
-        tbody.addEventListener('click', async function (ev) {
-            var btn = ev.target.closest('button[data-act]');
-            if (!btn) return;
-            var tr = btn.closest('tr[data-id]');
-            if (!tr) return;
-            var id = parseInt(tr.dataset.id, 10);
+        async function abrirEdicion(id) {
+            try {
+                var u = await api('/api/usuarios.php?id=' + id);
+                usuariosRegistroCache[id] = u;
+                modoEdicion = true;
+                resetForm();
+                fId.value = u.id;
+                modalTitulo.textContent = 'Editar usuario';
+                modalSub.textContent    = '#' + u.id;
+                document.getElementById('usr-nombre').value    = u.nombre   || '';
+                document.getElementById('usr-correo').value    = u.correo   || '';
+                document.getElementById('usr-telefono').value  = u.telefono || '';
+                document.getElementById('usr-dni').value       = u.dni      || '';
+                document.getElementById('usr-comunidad').value = u.comunidad != null ? u.comunidad : '';
+                document.getElementById('usr-casa').value      = u.casa      != null ? u.casa      : '';
+                document.getElementById('usr-roles').value     = u.roles    || '';
+                fEstado.checked = parseInt(u.estado, 10) === 1;
+                setEstadoLabel();
+                hintPass.textContent = 'Dejar vacío para no cambiarla. Máximo 16 caracteres.';
+                document.getElementById('usr-contrasena').removeAttribute('required');
+                openModal();
+                document.getElementById('usr-nombre').focus();
+            } catch (err) {
+                toast(err.message, true);
+            }
+        }
 
-            if (btn.dataset.act === 'view') {
-                abrirConsulta(id);
+        function pedirEliminar(id) {
+            if (id === parseInt(ME.id, 10)) {
+                toast('No podés eliminar tu propio usuario.', true);
                 return;
             }
-
-            if (btn.dataset.act === 'edit') {
-                try {
-                    var u = await api('/api/usuarios.php?id=' + id);
-                    modoEdicion = true;
-                    resetForm();
-                    fId.value = u.id;
-                    modalTitulo.textContent = 'Editar usuario';
-                    modalSub.textContent    = '#' + u.id;
-                    document.getElementById('usr-nombre').value    = u.nombre   || '';
-                    document.getElementById('usr-correo').value    = u.correo   || '';
-                    document.getElementById('usr-telefono').value  = u.telefono || '';
-                    document.getElementById('usr-dni').value       = u.dni      || '';
-                    document.getElementById('usr-comunidad').value = u.comunidad != null ? u.comunidad : '';
-                    document.getElementById('usr-casa').value      = u.casa      != null ? u.casa      : '';
-                    document.getElementById('usr-roles').value     = u.roles    || '';
-                    fEstado.checked = parseInt(u.estado, 10) === 1;
-                    setEstadoLabel();
-                    hintPass.textContent = 'Dejar vacío para no cambiarla. Máximo 16 caracteres.';
-                    document.getElementById('usr-contrasena').removeAttribute('required');
-                    openModal();
-                    document.getElementById('usr-nombre').focus();
-                } catch (err) {
-                    toast(err.message, true);
-                }
-                return;
-            }
-
-            if (btn.dataset.act === 'delete') {
-                if (id === parseInt(ME.id, 10)) {
-                    toast('No podés eliminar tu propio usuario.', true);
-                    return;
-                }
-                var nombre = (tr.querySelector('.td-nombre') || {}).textContent || ('#' + id);
-                confirmMsg.textContent = '¿Eliminar al usuario "' + nombre.trim() + '"? Esta acción no se puede deshacer.';
-                pendingDeleteId = id;
-                confirmBox.classList.add('open');
-            }
-        });
-
+            var tr = tbody.querySelector('tr[data-id="' + id + '"]');
+            var nombre = tr ? ((tr.querySelector('.td-nombre') || {}).textContent || '').trim() : '';
+            confirmMsg.textContent = nombre
+                ? '¿Eliminar al usuario "' + nombre + '"? Esta acción no se puede deshacer.'
+                : '¿Eliminar al usuario #' + id + '? Esta acción no se puede deshacer.';
+            pendingDeleteId = id;
+            confirmBox.classList.add('open');
+        }
         confirmBox.addEventListener('click', function (ev) {
             if (ev.target === confirmBox || ev.target.closest('[data-act="cancel"]')) {
                 confirmBox.classList.remove('open');
                 pendingDeleteId = null;
             }
         });
-
         btnDelete.addEventListener('click', async function () {
             if (!pendingDeleteId) return;
             btnDelete.disabled = true;
             try {
                 await api('/api/usuarios.php?id=' + pendingDeleteId, { method: 'DELETE' });
                 toast('Usuario eliminado.');
-                navigate();
+                recargarUsuariosLista();
             } catch (err) {
                 toast(err.message, true);
             } finally {
@@ -2470,7 +2615,7 @@
                     toast('Usuario creado.');
                 }
                 closeModal();
-                navigate();
+                recargarUsuariosLista();
             } catch (err) {
                 showFormError(err.message);
             } finally {
@@ -2478,20 +2623,24 @@
             }
         });
 
-        applyFilters();
+        applyClientFilter();
     }
 
     // -------- Vista: Roles ------------------------------------------------
 
-    var rolesFiltros = {
+    var rolesFiltrosDefault = {
         sort:        'id',
         dir:         'desc',
         limit:       100,
         filtro_id:   '',
         nombre:      '',
+        slug:        '',
         descripcion: '',
         sistema:     ''
     };
+    var rolesFiltros         = Object.assign({}, rolesFiltrosDefault);
+    var rolesFiltrosSnapshot = null;
+    var rolesRegistroCache   = {};
 
     function rolesQueryString() {
         var qs = [];
@@ -2504,84 +2653,120 @@
         return qs.length ? ('?' + qs.join('&')) : '';
     }
 
+    function rolesFiltrosActivos() {
+        var n = 0;
+        Object.keys(rolesFiltrosDefault).forEach(function (k) {
+            if (k === 'sort' || k === 'dir' || k === 'limit') return;
+            if (String(rolesFiltros[k]) !== String(rolesFiltrosDefault[k])) n++;
+        });
+        return n;
+    }
+
+    function rolesCountText(n) {
+        return 'Mostrando ' + n + ' resultado(s) (límite ' + rolesFiltros.limit + ').';
+    }
+
+    function moduleHelpRolesHtml() {
+        return '<div class="module-help" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin-bottom:16px;box-shadow:var(--shadow);display:flex;gap:14px;align-items:center;">' +
+            '<div style="font-size:1.6rem;line-height:1;">🛡️</div>' +
+            '<div style="font-size:.88rem;color:var(--muted);line-height:1.45;">' +
+                'Los roles son los conjuntos de permisos que se asignan a los usuarios para definir qué pueden ver y qué acciones pueden ejecutar dentro del sistema.' +
+            '</div>' +
+        '</div>';
+    }
+
+    function renderRolesStats(kpis) {
+        return statCard('Total',         kpis.total   || 0, 'orange', 'Roles registrados') +
+               statCard('De sistema',    kpis.sistema || 0, 'red',    'No se pueden eliminar') +
+               statCard('Personalizados',kpis.custom  || 0, 'green',  'Definidos por el usuario');
+    }
+
+    async function recargarRolesLista() {
+        try {
+            var data  = await api('/api/roles.php' + rolesQueryString());
+            var roles = data.roles || [];
+            var kpis  = data.kpis  || {};
+            rolesRegistroCache = {};
+            var stats = document.getElementById('rolStats');
+            var tbody = document.getElementById('rolTbody');
+            var count = document.getElementById('rolCount');
+            if (stats) stats.innerHTML = renderRolesStats(kpis);
+            if (tbody) tbody.innerHTML = renderFilasRoles(roles);
+            if (count) count.textContent = rolesCountText(roles.length);
+            var btn = document.getElementById('rolFiltros');
+            if (btn) {
+                var n = rolesFiltrosActivos();
+                var badge = btn.querySelector('.btn-icon-badge');
+                btn.classList.toggle('active', n > 0);
+                if (badge) {
+                    badge.textContent = n || '';
+                    badge.style.display = n ? '' : 'none';
+                }
+            }
+            var searchInput = document.getElementById('rolSearch');
+            if (searchInput) searchInput.dispatchEvent(new Event('input'));
+        } catch (err) {
+            toast(err.message, true);
+        }
+    }
+
     async function renderRoles(view) {
         var data  = await api('/api/roles.php' + rolesQueryString());
         var roles = data.roles || [];
         var kpis  = data.kpis  || {};
-
-        var filtrosActivos = (rolesFiltros.filtro_id   !== '' ? 1 : 0) +
-                             (rolesFiltros.nombre      !== '' ? 1 : 0) +
-                             (rolesFiltros.descripcion !== '' ? 1 : 0) +
-                             (rolesFiltros.sistema     !== '' ? 1 : 0);
-        var badgeFiltros = filtrosActivos
-            ? ' <span class="badge badge-info" style="margin-left:6px;">' + filtrosActivos + '</span>'
-            : '';
+        rolesRegistroCache = {};
 
         view.innerHTML =
-            '<div class="page-header"><div>' +
-                '<h1>Roles</h1>' +
-                '<p>Perfiles de permisos disponibles para los usuarios del panel.</p>' +
-            '</div></div>' +
+            moduleHelpRolesHtml() +
 
-            '<div class="stats-bar">' +
-                statCard('Total',         kpis.total   || 0, 'orange', 'Roles registrados') +
-                statCard('De sistema',    kpis.sistema || 0, 'red',    'No se pueden eliminar') +
-                statCard('Personalizados',kpis.custom  || 0, 'green',  'Definidos por el usuario') +
-            '</div>' +
+            '<div class="stats-bar" id="rolStats">' + renderRolesStats(kpis) + '</div>' +
 
-            '<div class="toolbar">' +
-                '<div class="toolbar-left">' +
-                    '<button class="btn btn-secondary" id="rolFiltros" type="button">' +
-                        '<i class="fa-solid fa-filter"></i> Filtros' + badgeFiltros +
-                    '</button>' +
-                '</div>' +
-                '<div class="toolbar-right">' +
-                    '<button class="btn btn-primary" id="rolNuevo" type="button">+ Nuevo rol</button>' +
-                '</div>' +
-            '</div>' +
+            toolbarSeguridadHtml('rol', '🔍 Buscar nombre, slug o descripción…', '+ Nuevo rol', rolesFiltrosActivos()) +
 
             '<div class="table-card">' +
                 '<table><thead><tr>' +
-                    '<th>Código</th><th>Nombre</th><th>Descripción</th><th>Tipo</th>' +
-                    '<th style="text-align:right;">Acciones</th>' +
+                    '<th>Código</th><th>Nombre</th><th>Slug</th><th>Descripción</th><th>Tipo</th>' +
+                    '<th style="text-align:center;">Acciones</th>' +
                 '</tr></thead><tbody id="rolTbody">' +
                 renderFilasRoles(roles) +
                 '</tbody></table>' +
+                '<div class="table-empty" id="rolEmpty" style="display:none;">No hay roles que coincidan con la búsqueda.</div>' +
             '</div>' +
-            '<div class="text-muted text-sm" style="margin-top:10px;">' +
-                'Mostrando ' + roles.length + ' resultado(s) (límite ' + rolesFiltros.limit + ').' +
+            '<div class="text-muted text-sm" id="rolCount" style="margin-top:10px;">' +
+                rolesCountText(roles.length) +
             '</div>' +
 
             modalRolHtml() +
             modalFiltrosRolesHtml() +
             modalConsultarRolHtml() +
-            confirmDeleteRolHtml();
+            confirmDeleteRolHtml() +
+            ctxMenuAbmHtml('rolCtxMenu');
 
         wireRolesView();
     }
 
     function renderFilasRoles(roles) {
         if (!roles.length) {
-            return '<tr><td colspan="5" class="table-empty">No hay roles cargados.</td></tr>';
+            return '<tr><td colspan="6" class="table-empty">No hay roles cargados.</td></tr>';
         }
         return roles.map(function (r) {
             var esSistema = String(r.sistema || '') === '1';
-            return '<tr data-id="' + r.id + '" data-sistema="' + (esSistema ? 1 : 0) + '">' +
+            var busq   = String((r.nombre || '') + ' ' + (r.slug || '') + ' ' + (r.descripcion || '')).toLowerCase().trim();
+            return '<tr data-id="' + r.id + '" data-sistema="' + (esSistema ? 1 : 0) + '" data-search="' + e(busq) + '" style="cursor:pointer;">' +
                 '<td class="td-id">#' + r.id + '</td>' +
                 '<td><div class="td-nombre">' + e(r.nombre || '—') + '</div></td>' +
+                '<td>' + (r.slug ? '<code>' + e(r.slug) + '</code>' : '<span class="text-muted">—</span>') + '</td>' +
                 '<td>' + e(r.descripcion || '—') + '</td>' +
                 '<td>' +
                     (esSistema
                         ? '<span class="badge badge-danger">Sistema</span>'
                         : '<span class="badge badge-success">Personalizado</span>') +
                 '</td>' +
-                '<td>' +
-                    '<div class="actions" style="justify-content:flex-end;">' +
-                        '<button class="btn-icon-sm" data-act="view"   type="button" title="Consultar"><i class="fa-solid fa-eye"></i></button>' +
-                        '<button class="btn-icon-sm" data-act="edit"   type="button" title="Editar"><i class="fa-solid fa-pencil"></i></button>' +
-                        '<button class="btn-icon-sm" data-act="delete" type="button" title="Eliminar"' +
-                            (esSistema ? ' disabled style="opacity:.4;cursor:not-allowed;"' : '') +
-                            '><i class="fa-solid fa-trash"></i></button>' +
+                '<td style="text-align:center;">' +
+                    '<div class="actions" style="justify-content:center;">' +
+                        '<button class="btn-icon-sm" data-act="menu" type="button" title="Más acciones">' +
+                            '<i class="fa-solid fa-bars"></i>' +
+                        '</button>' +
                     '</div>' +
                 '</td>' +
             '</tr>';
@@ -2610,6 +2795,13 @@
                                 '<span class="toggle-track"><span class="toggle-thumb"></span></span>' +
                                 '<span class="toggle-label" id="rolSistemaLabel">Personalizado</span>' +
                             '</label></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group" style="flex:1 1 100%;"><label for="rol-slug">Slug</label>' +
+                            '<input id="rol-slug" name="slug" type="text" maxlength="64" ' +
+                                'pattern="[a-z0-9]+(?:[-_.][a-z0-9]+)*" ' +
+                                'placeholder="ej: admin, gestor.ventas, operador_l2" ' +
+                                'style="font-family:monospace;"></div>' +
                     '</div>' +
                     '<div class="form-row">' +
                         '<div class="form-group" style="flex:1 1 100%;"><label for="rol-descripcion">Descripción</label>' +
@@ -2646,67 +2838,60 @@
     }
 
     function modalFiltrosRolesHtml() {
-        function selOpt(value, label, current) {
-            var sel = String(current) === String(value) ? ' selected' : '';
-            return '<option value="' + e(value) + '"' + sel + '>' + e(label) + '</option>';
-        }
-        return '<div class="modal-backdrop" id="rolFiltrosModal"><div class="modal">' +
+        return '<div class="modal-backdrop" id="rolFiltrosModal"><div class="modal" style="max-width:560px;">' +
             '<div class="modal-header">' +
-                '<div class="modal-title"><span>Filtros</span></div>' +
-                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+                '<div class="modal-title"><i class="fa-solid fa-filter"></i> Filtros</div>' +
+                '<button class="btn btn-ghost" data-act="cerrar" type="button" title="Cerrar">&times;</button>' +
             '</div>' +
-            '<form id="rolFiltrosForm" novalidate>' +
-                '<div class="modal-body">' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="rflt-id">Código</label>' +
-                            '<input id="rflt-id" type="number" min="1" step="1" inputmode="numeric" ' +
-                                'placeholder="Código del registro" value="' + e(rolesFiltros.filtro_id) + '"></div>' +
-                        '<div class="form-group"><label for="rflt-nombre">Nombre</label>' +
-                            '<input id="rflt-nombre" type="text" maxlength="255" ' +
-                                'placeholder="Nombre del rol" value="' + e(rolesFiltros.nombre) + '"></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="rflt-descripcion">Descripción</label>' +
-                            '<input id="rflt-descripcion" type="text" maxlength="255" ' +
-                                'placeholder="Texto en descripción" value="' + e(rolesFiltros.descripcion) + '"></div>' +
-                        '<div class="form-group"><label for="rflt-sistema">Tipo</label>' +
-                            '<select id="rflt-sistema">' +
-                                selOpt('',  'Todos',          rolesFiltros.sistema) +
-                                selOpt('1', 'Sistema',        rolesFiltros.sistema) +
-                                selOpt('0', 'Personalizados', rolesFiltros.sistema) +
-                            '</select></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="rflt-sort">Ordenar por</label>' +
-                            '<select id="rflt-sort">' +
-                                selOpt('id',          'Código',      rolesFiltros.sort) +
-                                selOpt('nombre',      'Nombre',      rolesFiltros.sort) +
-                                selOpt('descripcion', 'Descripción', rolesFiltros.sort) +
-                                selOpt('sistema',     'Tipo',        rolesFiltros.sort) +
-                            '</select></div>' +
-                        '<div class="form-group"><label for="rflt-dir">Dirección</label>' +
-                            '<select id="rflt-dir">' +
-                                selOpt('desc', 'Descendente', rolesFiltros.dir) +
-                                selOpt('asc',  'Ascendente',  rolesFiltros.dir) +
-                            '</select></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="rflt-limit">Límite</label>' +
-                            '<input id="rflt-limit" type="number" min="1" max="1000" step="1" ' +
-                                'inputmode="numeric" value="' + e(rolesFiltros.limit) + '"></div>' +
+            '<div class="modal-body">' +
+                '<div class="form-row">' +
+                    '<div class="form-group"><label for="rflt-id">Código</label>' +
+                        '<input id="rflt-id" type="number" min="1" step="1" inputmode="numeric" placeholder="ID del rol…"></div>' +
+                    '<div class="form-group"><label for="rflt-nombre">Nombre</label>' +
+                        '<input id="rflt-nombre" type="text" maxlength="255" placeholder="Nombre del rol…"></div>' +
+                '</div>' +
+                '<div class="form-row">' +
+                    '<div class="form-group"><label for="rflt-slug">Slug</label>' +
+                        '<input id="rflt-slug" type="text" maxlength="64" placeholder="Texto en slug" style="font-family:monospace;"></div>' +
+                    '<div class="form-group"><label for="rflt-descripcion">Descripción</label>' +
+                        '<input id="rflt-descripcion" type="text" maxlength="255" placeholder="Texto en descripción"></div>' +
+                '</div>' +
+                '<div class="form-group">' +
+                    '<label>Tipo</label>' +
+                    '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+                        '<button type="button" class="filter-chip" data-chip="sistema" data-value="" >Todos</button>' +
+                        '<button type="button" class="filter-chip" data-chip="sistema" data-value="1">Sistema</button>' +
+                        '<button type="button" class="filter-chip" data-chip="sistema" data-value="0">Personalizados</button>' +
                     '</div>' +
                 '</div>' +
-                '<div class="modal-footer">' +
-                    '<button type="button" class="btn btn-ghost"     id="rolFiltrosReset" >Limpiar</button>' +
-                    '<button type="button" class="btn btn-secondary" data-act="close"    >Cancelar</button>' +
-                    '<button type="submit"  class="btn btn-primary"                       >Aplicar</button>' +
+                '<div class="form-row form-row-3">' +
+                    '<div class="form-group"><label for="rflt-limit">Límite</label>' +
+                        '<input id="rflt-limit" type="number" min="1" max="1000" step="1" inputmode="numeric"></div>' +
+                    '<div class="form-group"><label for="rflt-sort">Ordenar por</label>' +
+                        '<select id="rflt-sort">' +
+                            '<option value="id">Código</option>' +
+                            '<option value="nombre">Nombre</option>' +
+                            '<option value="slug">Slug</option>' +
+                            '<option value="descripcion">Descripción</option>' +
+                            '<option value="sistema">Tipo</option>' +
+                        '</select></div>' +
+                    '<div class="form-group"><label for="rflt-dir">Dirección</label>' +
+                        '<select id="rflt-dir">' +
+                            '<option value="desc">Descendente</option>' +
+                            '<option value="asc">Ascendente</option>' +
+                        '</select></div>' +
                 '</div>' +
-            '</form>' +
+            '</div>' +
+            '<div class="modal-footer">' +
+                '<button type="button" class="btn btn-ghost"   data-act="cerrar"  >Cerrar</button>' +
+                '<button type="button" class="btn btn-ghost"   data-act="limpiar" >Limpiar</button>' +
+                '<button type="button" class="btn btn-primary" data-act="aplicar" >Aplicar</button>' +
+            '</div>' +
         '</div></div>';
     }
 
     function modalConsultarRolHtml() {
-        return '<div class="modal-backdrop" id="rolConsultar"><div class="modal">' +
+        return '<div class="modal-backdrop" id="rolConsultar"><div class="modal modal-wide">' +
             '<div class="modal-header">' +
                 '<div class="modal-title">' +
                     '<span>Consultar rol</span>' +
@@ -2719,12 +2904,18 @@
             '</div>' +
             '<div class="modal-footer">' +
                 '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+                '<button type="button" class="btn btn-primary" id="rolConsultarEditar">' +
+                    '<i class="fa-solid fa-pen"></i> Editar' +
+                '</button>' +
             '</div>' +
         '</div></div>';
     }
 
     function wireRolesView() {
         var tbody       = document.getElementById('rolTbody');
+        var emptyState  = document.getElementById('rolEmpty');
+        var searchInput = document.getElementById('rolSearch');
+        var searchClear = document.getElementById('rolSearchClear');
 
         var modal        = document.getElementById('rolModal');
         var modalTitulo  = document.getElementById('rolModalTitulo');
@@ -2741,61 +2932,181 @@
         var btnDelete  = document.getElementById('rolConfirmBtn');
 
         var filtrosModal = document.getElementById('rolFiltrosModal');
-        var filtrosForm  = document.getElementById('rolFiltrosForm');
 
-        var consultarModal = document.getElementById('rolConsultar');
-        var consultarSub   = document.getElementById('rolConsultarSub');
-        var consultarBody  = document.getElementById('rolConsultarBody');
+        var consultarModal  = document.getElementById('rolConsultar');
+        var consultarSub    = document.getElementById('rolConsultarSub');
+        var consultarBody   = document.getElementById('rolConsultarBody');
+        var consultarEditar = document.getElementById('rolConsultarEditar');
 
-        var pendingDeleteId = null;
-        var modoEdicion     = false;
+        var ctxMenu = document.getElementById('rolCtxMenu');
+        var ctxId   = null;
 
-        document.getElementById('rolFiltros').addEventListener('click', function () {
+        var pendingDeleteId   = null;
+        var modoEdicion       = false;
+        var consultarIdActual = null;
+
+        // --- Búsqueda rápida cliente ----------------------------------------
+        function applyClientFilter() {
+            var q = searchInput.value.trim().toLowerCase();
+            var visibles = 0;
+            tbody.querySelectorAll('tr[data-id]').forEach(function (tr) {
+                var haystack = tr.dataset.search || '';
+                var show = !q || haystack.indexOf(q) !== -1;
+                tr.style.display = show ? '' : 'none';
+                if (show) visibles++;
+            });
+            emptyState.style.display = (visibles === 0 && tbody.querySelector('tr[data-id]')) ? '' : 'none';
+            searchClear.style.display = q ? '' : 'none';
+        }
+        searchInput.addEventListener('input', applyClientFilter);
+        searchClear.addEventListener('click', function () {
+            searchInput.value = '';
+            applyClientFilter();
+            searchInput.focus();
+        });
+
+        // --- Refrescar -----------------------------------------------------
+        document.getElementById('rolRefrescar').addEventListener('click', function () {
+            recargarRolesLista();
+        });
+
+        // --- Modal de filtros (live apply + snapshot) ----------------------
+        var fFltId    = document.getElementById('rflt-id');
+        var fFltNom   = document.getElementById('rflt-nombre');
+        var fFltSlug  = document.getElementById('rflt-slug');
+        var fFltDesc  = document.getElementById('rflt-descripcion');
+        var fFltLim   = document.getElementById('rflt-limit');
+        var fFltSort  = document.getElementById('rflt-sort');
+        var fFltDir   = document.getElementById('rflt-dir');
+        var fChipsSis = filtrosModal.querySelectorAll('.filter-chip[data-chip="sistema"]');
+
+        function sincronizarFiltros() {
+            fFltId.value   = rolesFiltros.filtro_id;
+            fFltNom.value  = rolesFiltros.nombre;
+            fFltSlug.value = rolesFiltros.slug;
+            fFltDesc.value = rolesFiltros.descripcion;
+            fFltLim.value  = rolesFiltros.limit;
+            fFltSort.value = rolesFiltros.sort;
+            fFltDir.value  = rolesFiltros.dir;
+            fChipsSis.forEach(function (c) {
+                c.classList.toggle('active', c.dataset.value === String(rolesFiltros.sistema || ''));
+            });
+        }
+        function abrirModalFiltros() {
+            rolesFiltrosSnapshot = Object.assign({}, rolesFiltros);
+            sincronizarFiltros();
             filtrosModal.classList.add('open');
-        });
-        filtrosModal.addEventListener('click', function (ev) {
-            if (ev.target === filtrosModal || ev.target.closest('[data-act="close"]')) {
-                filtrosModal.classList.remove('open');
+        }
+        function cerrarModalFiltros() { filtrosModal.classList.remove('open'); }
+        function cancelarFiltros() {
+            if (rolesFiltrosSnapshot) {
+                Object.keys(rolesFiltrosSnapshot).forEach(function (k) {
+                    rolesFiltros[k] = rolesFiltrosSnapshot[k];
+                });
+                rolesFiltrosSnapshot = null;
+                recargarRolesLista();
             }
-        });
-        document.getElementById('rolFiltrosReset').addEventListener('click', function () {
-            rolesFiltros.sort        = 'id';
-            rolesFiltros.dir         = 'desc';
-            rolesFiltros.limit       = 100;
-            rolesFiltros.filtro_id   = '';
-            rolesFiltros.nombre      = '';
-            rolesFiltros.descripcion = '';
-            rolesFiltros.sistema     = '';
-            filtrosModal.classList.remove('open');
-            navigate();
-        });
-        filtrosForm.addEventListener('submit', function (ev) {
-            ev.preventDefault();
-            rolesFiltros.filtro_id   = document.getElementById('rflt-id').value.trim();
-            rolesFiltros.nombre      = document.getElementById('rflt-nombre').value.trim();
-            rolesFiltros.descripcion = document.getElementById('rflt-descripcion').value.trim();
-            rolesFiltros.sistema     = document.getElementById('rflt-sistema').value;
-            rolesFiltros.limit       = parseInt(document.getElementById('rflt-limit').value, 10) || 100;
-            rolesFiltros.sort        = document.getElementById('rflt-sort').value || 'id';
-            rolesFiltros.dir         = document.getElementById('rflt-dir').value  || 'desc';
-            filtrosModal.classList.remove('open');
-            navigate();
+            cerrarModalFiltros();
+        }
+        function limpiarFiltros() {
+            Object.assign(rolesFiltros, rolesFiltrosDefault);
+            sincronizarFiltros();
+            recargarRolesLista();
+        }
+
+        document.getElementById('rolFiltros').addEventListener('click', abrirModalFiltros);
+        filtrosModal.addEventListener('click', function (ev) {
+            if (ev.target === filtrosModal) { cancelarFiltros(); return; }
+            var b = ev.target.closest('button[data-act]');
+            if (!b) return;
+            if (b.dataset.act === 'cerrar')  cancelarFiltros();
+            if (b.dataset.act === 'limpiar') limpiarFiltros();
+            if (b.dataset.act === 'aplicar') { rolesFiltrosSnapshot = null; cerrarModalFiltros(); }
         });
 
+        function liveApply(field, valueGetter) {
+            return function () {
+                rolesFiltros[field] = valueGetter();
+                recargarRolesLista();
+            };
+        }
+        fFltId.addEventListener('input',   liveApply('filtro_id',   function () { return fFltId.value.trim(); }));
+        fFltNom.addEventListener('input',  liveApply('nombre',      function () { return fFltNom.value.trim(); }));
+        fFltSlug.addEventListener('input', liveApply('slug',        function () { return fFltSlug.value.trim(); }));
+        fFltDesc.addEventListener('input', liveApply('descripcion', function () { return fFltDesc.value.trim(); }));
+        fFltLim.addEventListener('change',  liveApply('limit',      function () { return parseInt(fFltLim.value, 10) || 100; }));
+        fFltSort.addEventListener('change', liveApply('sort',       function () { return fFltSort.value || 'id'; }));
+        fFltDir.addEventListener('change',  liveApply('dir',        function () { return fFltDir.value  || 'desc'; }));
+        fChipsSis.forEach(function (chip) {
+            chip.addEventListener('click', function () {
+                rolesFiltros.sistema = chip.dataset.value;
+                fChipsSis.forEach(function (c) { c.classList.toggle('active', c === chip); });
+                recargarRolesLista();
+            });
+        });
+
+        // --- Menú contextual de fila ---------------------------------------
+        function cerrarCtxMenu() {
+            ctxMenu.classList.remove('open');
+            ctxId = null;
+        }
+        ctxMenu.addEventListener('click', function (ev) {
+            var b = ev.target.closest('button[data-action]');
+            if (!b || ctxId == null) return;
+            var id = ctxId;
+            cerrarCtxMenu();
+            if (b.dataset.action === 'consultar')     abrirConsulta(id);
+            else if (b.dataset.action === 'editar')   abrirEdicion(id);
+            else if (b.dataset.action === 'eliminar') pedirEliminar(id);
+        });
+        conectarCierreCtxMenu(ctxMenu, cerrarCtxMenu);
+
+        // --- Filas: clic = Consultar, click derecho = ctx menu -------------
+        tbody.addEventListener('click', function (ev) {
+            var tr = ev.target.closest('tr[data-id]');
+            if (!tr) return;
+            var id = parseInt(tr.dataset.id, 10);
+            var btn = ev.target.closest('button[data-act="menu"]');
+            if (btn) {
+                ev.stopPropagation();
+                var rect = btn.getBoundingClientRect();
+                abrirCtxMenuFlotante(ctxMenu, rect.right - 200, rect.bottom + 4);
+                ctxId = id;
+                return;
+            }
+            if (ev.target.closest('a,input,select,button')) return;
+            abrirConsulta(id);
+        });
+        tbody.addEventListener('contextmenu', function (ev) {
+            var tr = ev.target.closest('tr[data-id]');
+            if (!tr) return;
+            ev.preventDefault();
+            var id = parseInt(tr.dataset.id, 10);
+            abrirCtxMenuFlotante(ctxMenu, ev.clientX, ev.clientY);
+            ctxId = id;
+        });
+
+        // --- Modal Consultar ----------------------------------------------
         consultarModal.addEventListener('click', function (ev) {
             if (ev.target === consultarModal || ev.target.closest('[data-act="close"]')) {
                 consultarModal.classList.remove('open');
             }
         });
+        consultarEditar.addEventListener('click', function () {
+            if (consultarIdActual == null) return;
+            consultarModal.classList.remove('open');
+            abrirEdicion(consultarIdActual);
+        });
 
         async function abrirConsulta(id) {
+            consultarIdActual = id;
             consultarSub.innerHTML  = '<code>#' + id + '</code>';
             consultarBody.innerHTML = '<div style="display:flex;justify-content:center;padding:24px"><div class="spin"></div></div>';
             consultarModal.classList.add('open');
 
             var r;
             try {
-                r = await api('/api/roles.php?id=' + id);
+                r = rolesRegistroCache[id] || (rolesRegistroCache[id] = await api('/api/roles.php?id=' + id));
             } catch (err) {
                 consultarBody.innerHTML = '<div class="alert alert-error">' + e(err.message) + '</div>';
                 return;
@@ -2810,7 +3121,8 @@
             consultarBody.innerHTML =
                 abmRow    ('Código',      '<code>#' + r.id + '</code>') +
                 abmRow    ('Tipo',         tipoBadge) +
-                abmRowTxt ('Nombre',       r.nombre,      'Sin nombre',      true) +
+                abmRowTxt ('Nombre',       r.nombre,      'Sin nombre') +
+                abmRow    ('Slug',         r.slug ? '<code>' + e(r.slug) + '</code>' : '<span class="muted">Sin slug</span>') +
                 abmRowTxt ('Descripción',  r.descripcion, 'Sin descripción', true) +
                 abmRowTxt ('Permisos',     r.permisos,    'Sin permisos',    true) +
                 abmRowTxt ('Menús',        r.menus,       'Sin menús',       true) +
@@ -2852,67 +3164,56 @@
             document.getElementById('rol-nombre').focus();
         });
 
-        tbody.addEventListener('click', async function (ev) {
-            var btn = ev.target.closest('button[data-act]');
-            if (!btn || btn.disabled) return;
-            var tr = btn.closest('tr[data-id]');
-            if (!tr) return;
-            var id = parseInt(tr.dataset.id, 10);
+        async function abrirEdicion(id) {
+            try {
+                var r = await api('/api/roles.php?id=' + id);
+                rolesRegistroCache[id] = r;
+                modoEdicion = true;
+                resetForm();
+                fId.value = r.id;
+                modalTitulo.textContent = 'Editar rol';
+                modalSub.textContent    = '#' + r.id;
+                document.getElementById('rol-nombre').value      = r.nombre      || '';
+                document.getElementById('rol-slug').value        = r.slug        || '';
+                document.getElementById('rol-descripcion').value = r.descripcion || '';
+                document.getElementById('rol-permisos').value    = r.permisos    || '';
+                document.getElementById('rol-menus').value       = r.menus       || '';
+                document.getElementById('rol-widgets').value     = r.widgets     || '';
+                fSistema.checked = String(r.sistema || '') === '1';
+                setSistemaLabel();
+                openModal();
+                document.getElementById('rol-nombre').focus();
+            } catch (err) {
+                toast(err.message, true);
+            }
+        }
 
-            if (btn.dataset.act === 'view') {
-                abrirConsulta(id);
+        function pedirEliminar(id) {
+            var tr = tbody.querySelector('tr[data-id="' + id + '"]');
+            if (tr && parseInt(tr.dataset.sistema, 10) === 1) {
+                toast('No se puede eliminar un rol de sistema.', true);
                 return;
             }
-
-            if (btn.dataset.act === 'edit') {
-                try {
-                    var r = await api('/api/roles.php?id=' + id);
-                    modoEdicion = true;
-                    resetForm();
-                    fId.value = r.id;
-                    modalTitulo.textContent = 'Editar rol';
-                    modalSub.textContent    = '#' + r.id;
-                    document.getElementById('rol-nombre').value      = r.nombre      || '';
-                    document.getElementById('rol-descripcion').value = r.descripcion || '';
-                    document.getElementById('rol-permisos').value    = r.permisos    || '';
-                    document.getElementById('rol-menus').value       = r.menus       || '';
-                    document.getElementById('rol-widgets').value     = r.widgets     || '';
-                    fSistema.checked = String(r.sistema || '') === '1';
-                    setSistemaLabel();
-                    openModal();
-                    document.getElementById('rol-nombre').focus();
-                } catch (err) {
-                    toast(err.message, true);
-                }
-                return;
-            }
-
-            if (btn.dataset.act === 'delete') {
-                if (parseInt(tr.dataset.sistema, 10) === 1) {
-                    toast('No se puede eliminar un rol de sistema.', true);
-                    return;
-                }
-                var nombre = (tr.querySelector('.td-nombre') || {}).textContent || ('#' + id);
-                confirmMsg.textContent = '¿Eliminar el rol "' + nombre.trim() + '"? Esta acción no se puede deshacer.';
-                pendingDeleteId = id;
-                confirmBox.classList.add('open');
-            }
-        });
-
+            var nombre = tr ? ((tr.querySelector('.td-nombre') || {}).textContent || '').trim() : '';
+            confirmMsg.textContent = nombre
+                ? '¿Eliminar el rol "' + nombre + '"? Esta acción no se puede deshacer.'
+                : '¿Eliminar el rol #' + id + '? Esta acción no se puede deshacer.';
+            pendingDeleteId = id;
+            confirmBox.classList.add('open');
+        }
         confirmBox.addEventListener('click', function (ev) {
             if (ev.target === confirmBox || ev.target.closest('[data-act="cancel"]')) {
                 confirmBox.classList.remove('open');
                 pendingDeleteId = null;
             }
         });
-
         btnDelete.addEventListener('click', async function () {
             if (!pendingDeleteId) return;
             btnDelete.disabled = true;
             try {
                 await api('/api/roles.php?id=' + pendingDeleteId, { method: 'DELETE' });
                 toast('Rol eliminado.');
-                navigate();
+                recargarRolesLista();
             } catch (err) {
                 toast(err.message, true);
             } finally {
@@ -2928,6 +3229,7 @@
 
             var payload = {
                 nombre:      document.getElementById('rol-nombre').value.trim(),
+                slug:        document.getElementById('rol-slug').value.trim(),
                 descripcion: document.getElementById('rol-descripcion').value.trim(),
                 permisos:    document.getElementById('rol-permisos').value,
                 menus:       document.getElementById('rol-menus').value,
@@ -2951,13 +3253,634 @@
                     toast('Rol creado.');
                 }
                 closeModal();
-                navigate();
+                recargarRolesLista();
             } catch (err) {
                 showFormError(err.message);
             } finally {
                 btnGuardar.disabled = false;
             }
         });
+
+        applyClientFilter();
+    }
+
+    // -------- Vista: Permisos ---------------------------------------------
+
+    var permisosFiltrosDefault = {
+        sort:        'id',
+        dir:         'desc',
+        limit:       100,
+        filtro_id:   '',
+        nombre:      '',
+        slug:        '',
+        descripcion: '',
+        sistema:     ''
+    };
+    var permisosFiltros         = Object.assign({}, permisosFiltrosDefault);
+    var permisosFiltrosSnapshot = null;
+    var permisosRegistroCache   = {};
+
+    function permisosQueryString() {
+        var qs = [];
+        Object.keys(permisosFiltros).forEach(function (k) {
+            var v = permisosFiltros[k];
+            if (v !== '' && v != null) {
+                qs.push(encodeURIComponent(k) + '=' + encodeURIComponent(v));
+            }
+        });
+        return qs.length ? ('?' + qs.join('&')) : '';
+    }
+
+    function permisosFiltrosActivos() {
+        var n = 0;
+        Object.keys(permisosFiltrosDefault).forEach(function (k) {
+            if (k === 'sort' || k === 'dir' || k === 'limit') return;
+            if (String(permisosFiltros[k]) !== String(permisosFiltrosDefault[k])) n++;
+        });
+        return n;
+    }
+
+    function permisosCountText(n) {
+        return 'Mostrando ' + n + ' resultado(s) (límite ' + permisosFiltros.limit + ').';
+    }
+
+    function moduleHelpPermisosHtml() {
+        return '<div class="module-help" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin-bottom:16px;box-shadow:var(--shadow);display:flex;gap:14px;align-items:center;">' +
+            '<div style="font-size:1.6rem;line-height:1;">🔑</div>' +
+            '<div style="font-size:.88rem;color:var(--muted);line-height:1.45;">' +
+                'Los permisos son las capacidades individuales que se agrupan dentro de los roles y determinan qué operaciones concretas puede ejecutar cada usuario del sistema.' +
+            '</div>' +
+        '</div>';
+    }
+
+    function renderPermisosStats(kpis) {
+        return statCard('Total',         kpis.total   || 0, 'orange', 'Permisos registrados') +
+               statCard('De sistema',    kpis.sistema || 0, 'red',    'No se pueden eliminar') +
+               statCard('Personalizados',kpis.custom  || 0, 'green',  'Definidos por el usuario');
+    }
+
+    async function recargarPermisosLista() {
+        try {
+            var data     = await api('/api/permisos.php' + permisosQueryString());
+            var permisos = data.permisos || [];
+            var kpis     = data.kpis     || {};
+            permisosRegistroCache = {};
+            var stats = document.getElementById('permStats');
+            var tbody = document.getElementById('permTbody');
+            var count = document.getElementById('permCount');
+            if (stats) stats.innerHTML = renderPermisosStats(kpis);
+            if (tbody) tbody.innerHTML = renderFilasPermisos(permisos);
+            if (count) count.textContent = permisosCountText(permisos.length);
+            var btn = document.getElementById('permFiltros');
+            if (btn) {
+                var n = permisosFiltrosActivos();
+                var badge = btn.querySelector('.btn-icon-badge');
+                btn.classList.toggle('active', n > 0);
+                if (badge) {
+                    badge.textContent = n || '';
+                    badge.style.display = n ? '' : 'none';
+                }
+            }
+            var searchInput = document.getElementById('permSearch');
+            if (searchInput) searchInput.dispatchEvent(new Event('input'));
+        } catch (err) {
+            toast(err.message, true);
+        }
+    }
+
+    async function renderPermisos(view) {
+        var data     = await api('/api/permisos.php' + permisosQueryString());
+        var permisos = data.permisos || [];
+        var kpis     = data.kpis     || {};
+        permisosRegistroCache = {};
+
+        view.innerHTML =
+            moduleHelpPermisosHtml() +
+
+            '<div class="stats-bar" id="permStats">' + renderPermisosStats(kpis) + '</div>' +
+
+            toolbarSeguridadHtml('perm', '🔍 Buscar nombre, slug o descripción…', '+ Nuevo permiso', permisosFiltrosActivos()) +
+
+            '<div class="table-card">' +
+                '<table><thead><tr>' +
+                    '<th>Código</th><th>Nombre</th><th>Slug</th><th>Descripción</th><th>Tipo</th>' +
+                    '<th style="text-align:center;">Acciones</th>' +
+                '</tr></thead><tbody id="permTbody">' +
+                renderFilasPermisos(permisos) +
+                '</tbody></table>' +
+                '<div class="table-empty" id="permEmpty" style="display:none;">No hay permisos que coincidan con la búsqueda.</div>' +
+            '</div>' +
+            '<div class="text-muted text-sm" id="permCount" style="margin-top:10px;">' +
+                permisosCountText(permisos.length) +
+            '</div>' +
+
+            modalPermisoHtml() +
+            modalFiltrosPermisosHtml() +
+            modalConsultarPermisoHtml() +
+            confirmDeletePermisoHtml() +
+            ctxMenuAbmHtml('permCtxMenu');
+
+        wirePermisosView();
+    }
+
+    function renderFilasPermisos(permisos) {
+        if (!permisos.length) {
+            return '<tr><td colspan="6" class="table-empty">No hay permisos cargados.</td></tr>';
+        }
+        return permisos.map(function (p) {
+            var esSistema = String(p.sistema || '') === '1';
+            var busq   = String((p.nombre || '') + ' ' + (p.slug || '') + ' ' + (p.descripcion || '')).toLowerCase().trim();
+            return '<tr data-id="' + p.id + '" data-sistema="' + (esSistema ? 1 : 0) + '" data-search="' + e(busq) + '" style="cursor:pointer;">' +
+                '<td class="td-id">#' + p.id + '</td>' +
+                '<td><div class="td-nombre">' + e(p.nombre || '—') + '</div></td>' +
+                '<td>' + (p.slug ? '<code>' + e(p.slug) + '</code>' : '<span class="text-muted">—</span>') + '</td>' +
+                '<td>' + e(p.descripcion || '—') + '</td>' +
+                '<td>' +
+                    (esSistema
+                        ? '<span class="badge badge-danger">Sistema</span>'
+                        : '<span class="badge badge-success">Personalizado</span>') +
+                '</td>' +
+                '<td style="text-align:center;">' +
+                    '<div class="actions" style="justify-content:center;">' +
+                        '<button class="btn-icon-sm" data-act="menu" type="button" title="Más acciones">' +
+                            '<i class="fa-solid fa-bars"></i>' +
+                        '</button>' +
+                    '</div>' +
+                '</td>' +
+            '</tr>';
+        }).join('');
+    }
+
+    function modalPermisoHtml() {
+        return '<div class="modal-backdrop" id="permModal"><div class="modal">' +
+            '<div class="modal-header">' +
+                '<div class="modal-title">' +
+                    '<span id="permModalTitulo">Nuevo permiso</span>' +
+                    '<span class="modal-subtitle" id="permModalSub"></span>' +
+                '</div>' +
+                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+            '</div>' +
+            '<form id="permForm" novalidate>' +
+                '<input type="hidden" id="permId" value="">' +
+                '<div class="modal-body">' +
+                    '<div class="alert alert-error" id="permError" style="display:none;"></div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="perm-nombre">Nombre</label>' +
+                            '<input id="perm-nombre" name="nombre" type="text" maxlength="255" required></div>' +
+                        '<div class="form-group"><label>Tipo</label>' +
+                            '<label class="toggle-switch" style="margin-top:6px;">' +
+                                '<input id="perm-sistema" name="sistema" type="checkbox" value="1">' +
+                                '<span class="toggle-track"><span class="toggle-thumb"></span></span>' +
+                                '<span class="toggle-label" id="permSistemaLabel">Personalizado</span>' +
+                            '</label></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group" style="flex:1 1 100%;"><label for="perm-slug">Slug</label>' +
+                            '<input id="perm-slug" name="slug" type="text" maxlength="64" ' +
+                                'pattern="[a-z0-9]+(?:[-_.][a-z0-9]+)*" ' +
+                                'placeholder="ej: usuarios.editar, comunidades.baja" ' +
+                                'style="font-family:monospace;"></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group" style="flex:1 1 100%;"><label for="perm-descripcion">Descripción</label>' +
+                            '<textarea id="perm-descripcion" name="descripcion" rows="3" maxlength="255"></textarea></div>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="modal-footer">' +
+                    '<button type="button" class="btn btn-ghost" data-act="close">Cancelar</button>' +
+                    '<button type="submit" class="btn btn-primary" id="permGuardar">Guardar</button>' +
+                '</div>' +
+            '</form>' +
+        '</div></div>';
+    }
+
+    function confirmDeletePermisoHtml() {
+        return '<div class="confirm-backdrop" id="permConfirm"><div class="confirm-box">' +
+            '<div class="confirm-title">Eliminar permiso</div>' +
+            '<div class="confirm-msg" id="permConfirmMsg">Esta acción no se puede deshacer.</div>' +
+            '<div class="confirm-actions">' +
+                '<button class="btn btn-ghost"  data-act="cancel" type="button">Cancelar</button>' +
+                '<button class="btn btn-danger" id="permConfirmBtn" type="button">Eliminar</button>' +
+            '</div>' +
+        '</div></div>';
+    }
+
+    function modalFiltrosPermisosHtml() {
+        return '<div class="modal-backdrop" id="permFiltrosModal"><div class="modal" style="max-width:560px;">' +
+            '<div class="modal-header">' +
+                '<div class="modal-title"><i class="fa-solid fa-filter"></i> Filtros</div>' +
+                '<button class="btn btn-ghost" data-act="cerrar" type="button" title="Cerrar">&times;</button>' +
+            '</div>' +
+            '<div class="modal-body">' +
+                '<div class="form-row">' +
+                    '<div class="form-group"><label for="pflt-id">Código</label>' +
+                        '<input id="pflt-id" type="number" min="1" step="1" inputmode="numeric" placeholder="ID del permiso…"></div>' +
+                    '<div class="form-group"><label for="pflt-nombre">Nombre</label>' +
+                        '<input id="pflt-nombre" type="text" maxlength="255" placeholder="Nombre del permiso…"></div>' +
+                '</div>' +
+                '<div class="form-row">' +
+                    '<div class="form-group"><label for="pflt-slug">Slug</label>' +
+                        '<input id="pflt-slug" type="text" maxlength="64" placeholder="Texto en slug" style="font-family:monospace;"></div>' +
+                    '<div class="form-group"><label for="pflt-descripcion">Descripción</label>' +
+                        '<input id="pflt-descripcion" type="text" maxlength="255" placeholder="Texto en descripción"></div>' +
+                '</div>' +
+                '<div class="form-group">' +
+                    '<label>Tipo</label>' +
+                    '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+                        '<button type="button" class="filter-chip" data-chip="sistema" data-value="" >Todos</button>' +
+                        '<button type="button" class="filter-chip" data-chip="sistema" data-value="1">Sistema</button>' +
+                        '<button type="button" class="filter-chip" data-chip="sistema" data-value="0">Personalizados</button>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="form-row form-row-3">' +
+                    '<div class="form-group"><label for="pflt-limit">Límite</label>' +
+                        '<input id="pflt-limit" type="number" min="1" max="1000" step="1" inputmode="numeric"></div>' +
+                    '<div class="form-group"><label for="pflt-sort">Ordenar por</label>' +
+                        '<select id="pflt-sort">' +
+                            '<option value="id">Código</option>' +
+                            '<option value="nombre">Nombre</option>' +
+                            '<option value="slug">Slug</option>' +
+                            '<option value="descripcion">Descripción</option>' +
+                            '<option value="sistema">Tipo</option>' +
+                        '</select></div>' +
+                    '<div class="form-group"><label for="pflt-dir">Dirección</label>' +
+                        '<select id="pflt-dir">' +
+                            '<option value="desc">Descendente</option>' +
+                            '<option value="asc">Ascendente</option>' +
+                        '</select></div>' +
+                '</div>' +
+            '</div>' +
+            '<div class="modal-footer">' +
+                '<button type="button" class="btn btn-ghost"   data-act="cerrar"  >Cerrar</button>' +
+                '<button type="button" class="btn btn-ghost"   data-act="limpiar" >Limpiar</button>' +
+                '<button type="button" class="btn btn-primary" data-act="aplicar" >Aplicar</button>' +
+            '</div>' +
+        '</div></div>';
+    }
+
+    function modalConsultarPermisoHtml() {
+        return '<div class="modal-backdrop" id="permConsultar"><div class="modal">' +
+            '<div class="modal-header">' +
+                '<div class="modal-title">' +
+                    '<span>Consultar permiso</span>' +
+                    '<span class="modal-subtitle" id="permConsultarSub"></span>' +
+                '</div>' +
+                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+            '</div>' +
+            '<div class="modal-body">' +
+                '<dl class="data-list" id="permConsultarBody"></dl>' +
+            '</div>' +
+            '<div class="modal-footer">' +
+                '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+                '<button type="button" class="btn btn-primary" id="permConsultarEditar">' +
+                    '<i class="fa-solid fa-pen"></i> Editar' +
+                '</button>' +
+            '</div>' +
+        '</div></div>';
+    }
+
+    function wirePermisosView() {
+        var tbody       = document.getElementById('permTbody');
+        var emptyState  = document.getElementById('permEmpty');
+        var searchInput = document.getElementById('permSearch');
+        var searchClear = document.getElementById('permSearchClear');
+
+        var modal        = document.getElementById('permModal');
+        var modalTitulo  = document.getElementById('permModalTitulo');
+        var modalSub     = document.getElementById('permModalSub');
+        var modalError   = document.getElementById('permError');
+        var form         = document.getElementById('permForm');
+        var fId          = document.getElementById('permId');
+        var fSistema     = document.getElementById('perm-sistema');
+        var sistemaLabel = document.getElementById('permSistemaLabel');
+        var btnGuardar   = document.getElementById('permGuardar');
+
+        var confirmBox = document.getElementById('permConfirm');
+        var confirmMsg = document.getElementById('permConfirmMsg');
+        var btnDelete  = document.getElementById('permConfirmBtn');
+
+        var filtrosModal = document.getElementById('permFiltrosModal');
+
+        var consultarModal  = document.getElementById('permConsultar');
+        var consultarSub    = document.getElementById('permConsultarSub');
+        var consultarBody   = document.getElementById('permConsultarBody');
+        var consultarEditar = document.getElementById('permConsultarEditar');
+
+        var ctxMenu = document.getElementById('permCtxMenu');
+        var ctxId   = null;
+
+        var pendingDeleteId   = null;
+        var modoEdicion       = false;
+        var consultarIdActual = null;
+
+        // --- Búsqueda rápida cliente ----------------------------------------
+        function applyClientFilter() {
+            var q = searchInput.value.trim().toLowerCase();
+            var visibles = 0;
+            tbody.querySelectorAll('tr[data-id]').forEach(function (tr) {
+                var haystack = tr.dataset.search || '';
+                var show = !q || haystack.indexOf(q) !== -1;
+                tr.style.display = show ? '' : 'none';
+                if (show) visibles++;
+            });
+            emptyState.style.display = (visibles === 0 && tbody.querySelector('tr[data-id]')) ? '' : 'none';
+            searchClear.style.display = q ? '' : 'none';
+        }
+        searchInput.addEventListener('input', applyClientFilter);
+        searchClear.addEventListener('click', function () {
+            searchInput.value = '';
+            applyClientFilter();
+            searchInput.focus();
+        });
+
+        // --- Refrescar -----------------------------------------------------
+        document.getElementById('permRefrescar').addEventListener('click', function () {
+            recargarPermisosLista();
+        });
+
+        // --- Modal de filtros (live apply + snapshot) ----------------------
+        var fFltId    = document.getElementById('pflt-id');
+        var fFltNom   = document.getElementById('pflt-nombre');
+        var fFltSlug  = document.getElementById('pflt-slug');
+        var fFltDesc  = document.getElementById('pflt-descripcion');
+        var fFltLim   = document.getElementById('pflt-limit');
+        var fFltSort  = document.getElementById('pflt-sort');
+        var fFltDir   = document.getElementById('pflt-dir');
+        var fChipsSis = filtrosModal.querySelectorAll('.filter-chip[data-chip="sistema"]');
+
+        function sincronizarFiltros() {
+            fFltId.value   = permisosFiltros.filtro_id;
+            fFltNom.value  = permisosFiltros.nombre;
+            fFltSlug.value = permisosFiltros.slug;
+            fFltDesc.value = permisosFiltros.descripcion;
+            fFltLim.value  = permisosFiltros.limit;
+            fFltSort.value = permisosFiltros.sort;
+            fFltDir.value  = permisosFiltros.dir;
+            fChipsSis.forEach(function (c) {
+                c.classList.toggle('active', c.dataset.value === String(permisosFiltros.sistema || ''));
+            });
+        }
+        function abrirModalFiltros() {
+            permisosFiltrosSnapshot = Object.assign({}, permisosFiltros);
+            sincronizarFiltros();
+            filtrosModal.classList.add('open');
+        }
+        function cerrarModalFiltros() { filtrosModal.classList.remove('open'); }
+        function cancelarFiltros() {
+            if (permisosFiltrosSnapshot) {
+                Object.keys(permisosFiltrosSnapshot).forEach(function (k) {
+                    permisosFiltros[k] = permisosFiltrosSnapshot[k];
+                });
+                permisosFiltrosSnapshot = null;
+                recargarPermisosLista();
+            }
+            cerrarModalFiltros();
+        }
+        function limpiarFiltros() {
+            Object.assign(permisosFiltros, permisosFiltrosDefault);
+            sincronizarFiltros();
+            recargarPermisosLista();
+        }
+
+        document.getElementById('permFiltros').addEventListener('click', abrirModalFiltros);
+        filtrosModal.addEventListener('click', function (ev) {
+            if (ev.target === filtrosModal) { cancelarFiltros(); return; }
+            var b = ev.target.closest('button[data-act]');
+            if (!b) return;
+            if (b.dataset.act === 'cerrar')  cancelarFiltros();
+            if (b.dataset.act === 'limpiar') limpiarFiltros();
+            if (b.dataset.act === 'aplicar') { permisosFiltrosSnapshot = null; cerrarModalFiltros(); }
+        });
+
+        function liveApply(field, valueGetter) {
+            return function () {
+                permisosFiltros[field] = valueGetter();
+                recargarPermisosLista();
+            };
+        }
+        fFltId.addEventListener('input',   liveApply('filtro_id',   function () { return fFltId.value.trim(); }));
+        fFltNom.addEventListener('input',  liveApply('nombre',      function () { return fFltNom.value.trim(); }));
+        fFltSlug.addEventListener('input', liveApply('slug',        function () { return fFltSlug.value.trim(); }));
+        fFltDesc.addEventListener('input', liveApply('descripcion', function () { return fFltDesc.value.trim(); }));
+        fFltLim.addEventListener('change',  liveApply('limit',      function () { return parseInt(fFltLim.value, 10) || 100; }));
+        fFltSort.addEventListener('change', liveApply('sort',       function () { return fFltSort.value || 'id'; }));
+        fFltDir.addEventListener('change',  liveApply('dir',        function () { return fFltDir.value  || 'desc'; }));
+        fChipsSis.forEach(function (chip) {
+            chip.addEventListener('click', function () {
+                permisosFiltros.sistema = chip.dataset.value;
+                fChipsSis.forEach(function (c) { c.classList.toggle('active', c === chip); });
+                recargarPermisosLista();
+            });
+        });
+
+        // --- Menú contextual de fila ---------------------------------------
+        function cerrarCtxMenu() {
+            ctxMenu.classList.remove('open');
+            ctxId = null;
+        }
+        ctxMenu.addEventListener('click', function (ev) {
+            var b = ev.target.closest('button[data-action]');
+            if (!b || ctxId == null) return;
+            var id = ctxId;
+            cerrarCtxMenu();
+            if (b.dataset.action === 'consultar')     abrirConsulta(id);
+            else if (b.dataset.action === 'editar')   abrirEdicion(id);
+            else if (b.dataset.action === 'eliminar') pedirEliminar(id);
+        });
+        conectarCierreCtxMenu(ctxMenu, cerrarCtxMenu);
+
+        // --- Filas: clic = Consultar, click derecho = ctx menu -------------
+        tbody.addEventListener('click', function (ev) {
+            var tr = ev.target.closest('tr[data-id]');
+            if (!tr) return;
+            var id = parseInt(tr.dataset.id, 10);
+            var btn = ev.target.closest('button[data-act="menu"]');
+            if (btn) {
+                ev.stopPropagation();
+                var rect = btn.getBoundingClientRect();
+                abrirCtxMenuFlotante(ctxMenu, rect.right - 200, rect.bottom + 4);
+                ctxId = id;
+                return;
+            }
+            if (ev.target.closest('a,input,select,button')) return;
+            abrirConsulta(id);
+        });
+        tbody.addEventListener('contextmenu', function (ev) {
+            var tr = ev.target.closest('tr[data-id]');
+            if (!tr) return;
+            ev.preventDefault();
+            var id = parseInt(tr.dataset.id, 10);
+            abrirCtxMenuFlotante(ctxMenu, ev.clientX, ev.clientY);
+            ctxId = id;
+        });
+
+        // --- Modal Consultar ----------------------------------------------
+        consultarModal.addEventListener('click', function (ev) {
+            if (ev.target === consultarModal || ev.target.closest('[data-act="close"]')) {
+                consultarModal.classList.remove('open');
+            }
+        });
+        consultarEditar.addEventListener('click', function () {
+            if (consultarIdActual == null) return;
+            consultarModal.classList.remove('open');
+            abrirEdicion(consultarIdActual);
+        });
+
+        async function abrirConsulta(id) {
+            consultarIdActual = id;
+            consultarSub.innerHTML  = '<code>#' + id + '</code>';
+            consultarBody.innerHTML = '<div style="display:flex;justify-content:center;padding:24px"><div class="spin"></div></div>';
+            consultarModal.classList.add('open');
+
+            var p;
+            try {
+                p = permisosRegistroCache[id] || (permisosRegistroCache[id] = await api('/api/permisos.php?id=' + id));
+            } catch (err) {
+                consultarBody.innerHTML = '<div class="alert alert-error">' + e(err.message) + '</div>';
+                return;
+            }
+
+            var esSistema = String(p.sistema || '') === '1';
+            var tipoBadge = esSistema
+                ? '<span class="badge badge-danger">Sistema</span>'
+                : '<span class="badge badge-success">Personalizado</span>';
+
+            consultarSub.innerHTML  = '<code>#' + p.id + '</code>';
+            consultarBody.innerHTML =
+                abmRow    ('Código',      '<code>#' + p.id + '</code>') +
+                abmRow    ('Tipo',         tipoBadge) +
+                abmRowTxt ('Nombre',       p.nombre,      'Sin nombre') +
+                abmRow    ('Slug',         p.slug ? '<code>' + e(p.slug) + '</code>' : '<span class="muted">Sin slug</span>') +
+                abmRowTxt ('Descripción',  p.descripcion, 'Sin descripción', true);
+        }
+
+        function setSistemaLabel() {
+            sistemaLabel.textContent = fSistema.checked ? 'Sistema' : 'Personalizado';
+        }
+        fSistema.addEventListener('change', setSistemaLabel);
+
+        function resetForm() {
+            form.reset();
+            fId.value = '';
+            fSistema.checked = false;
+            setSistemaLabel();
+        }
+        function openModal()  { modal.classList.add('open'); }
+        function closeModal() {
+            modal.classList.remove('open');
+            modalError.style.display = 'none';
+            modalError.textContent = '';
+        }
+        function showFormError(msg) {
+            modalError.textContent = msg;
+            modalError.style.display = '';
+        }
+
+        modal.addEventListener('click', function (ev) {
+            if (ev.target === modal || ev.target.closest('[data-act="close"]')) closeModal();
+        });
+
+        document.getElementById('permNuevo').addEventListener('click', function () {
+            modoEdicion = false;
+            resetForm();
+            modalTitulo.textContent = 'Nuevo permiso';
+            modalSub.textContent    = '';
+            openModal();
+            document.getElementById('perm-nombre').focus();
+        });
+
+        async function abrirEdicion(id) {
+            try {
+                var p = await api('/api/permisos.php?id=' + id);
+                permisosRegistroCache[id] = p;
+                modoEdicion = true;
+                resetForm();
+                fId.value = p.id;
+                modalTitulo.textContent = 'Editar permiso';
+                modalSub.textContent    = '#' + p.id;
+                document.getElementById('perm-nombre').value      = p.nombre      || '';
+                document.getElementById('perm-slug').value        = p.slug        || '';
+                document.getElementById('perm-descripcion').value = p.descripcion || '';
+                fSistema.checked = String(p.sistema || '') === '1';
+                setSistemaLabel();
+                openModal();
+                document.getElementById('perm-nombre').focus();
+            } catch (err) {
+                toast(err.message, true);
+            }
+        }
+
+        function pedirEliminar(id) {
+            var tr = tbody.querySelector('tr[data-id="' + id + '"]');
+            if (tr && parseInt(tr.dataset.sistema, 10) === 1) {
+                toast('No se puede eliminar un permiso de sistema.', true);
+                return;
+            }
+            var nombre = tr ? ((tr.querySelector('.td-nombre') || {}).textContent || '').trim() : '';
+            confirmMsg.textContent = nombre
+                ? '¿Eliminar el permiso "' + nombre + '"? Esta acción no se puede deshacer.'
+                : '¿Eliminar el permiso #' + id + '? Esta acción no se puede deshacer.';
+            pendingDeleteId = id;
+            confirmBox.classList.add('open');
+        }
+        confirmBox.addEventListener('click', function (ev) {
+            if (ev.target === confirmBox || ev.target.closest('[data-act="cancel"]')) {
+                confirmBox.classList.remove('open');
+                pendingDeleteId = null;
+            }
+        });
+        btnDelete.addEventListener('click', async function () {
+            if (!pendingDeleteId) return;
+            btnDelete.disabled = true;
+            try {
+                await api('/api/permisos.php?id=' + pendingDeleteId, { method: 'DELETE' });
+                toast('Permiso eliminado.');
+                recargarPermisosLista();
+            } catch (err) {
+                toast(err.message, true);
+            } finally {
+                btnDelete.disabled = false;
+                confirmBox.classList.remove('open');
+                pendingDeleteId = null;
+            }
+        });
+
+        form.addEventListener('submit', async function (ev) {
+            ev.preventDefault();
+            modalError.style.display = 'none';
+
+            var payload = {
+                nombre:      document.getElementById('perm-nombre').value.trim(),
+                slug:        document.getElementById('perm-slug').value.trim(),
+                descripcion: document.getElementById('perm-descripcion').value.trim(),
+                sistema:     fSistema.checked ? 1 : 0
+            };
+
+            btnGuardar.disabled = true;
+            try {
+                if (modoEdicion) {
+                    await api('/api/permisos.php?id=' + encodeURIComponent(fId.value), {
+                        method: 'PUT',
+                        body:   payload
+                    });
+                    toast('Permiso actualizado.');
+                } else {
+                    await api('/api/permisos.php', {
+                        method: 'POST',
+                        body:   payload
+                    });
+                    toast('Permiso creado.');
+                }
+                closeModal();
+                recargarPermisosLista();
+            } catch (err) {
+                showFormError(err.message);
+            } finally {
+                btnGuardar.disabled = false;
+            }
+        });
+
+        applyClientFilter();
     }
 
     // -------- Vista: Comunidades ------------------------------------------
@@ -4898,8 +5821,8 @@
 
             '<div class="table-card">' +
                 '<table><thead><tr>' +
-                    '<th>Código</th><th>Modo</th><th>Fecha</th><th>Comunidad</th><th>Casa</th>' +
-                    '<th>Resultado</th><th>Cierre</th><th>Espera</th><th>Estado</th>' +
+                    '<th>Código</th><th>Modo</th><th>Fecha</th><th>Comunidad</th><th>Usuario</th>' +
+                    '<th>Guardia</th><th>Resultado</th><th>Espera</th><th>Estado</th>' +
                     '<th style="text-align:center;">Acciones</th>' +
                 '</tr></thead><tbody id="dspTbody">' +
                 renderFilasDisparos(disparos) +
@@ -5122,11 +6045,15 @@
             return '<tr><td colspan="10" class="table-empty">No hay disparos cargados.</td></tr>';
         }
         return disparos.map(function (d) {
-            var busq = String((d.modo || '') + ' ' + (d.comunidad_nombre || '') + ' ' + (d.casa_nombre || '') + ' ' + (d.resultado || '') + ' ' + (d.guardia_nombre || '') + ' ' + (d.estado_texto || '')).toLowerCase().trim();
-            var cerrado = d.cerrado
-                ? '<span class="badge badge-success">' + e(abmFecha(d.cerrado)) + '</span>'
-                : '<span class="badge badge-warn">Abierto</span>';
-            var espera = (d.espera != null && d.espera !== '') ? (e(String(d.espera)) + ' s') : '—';
+            var busq = String((d.modo || '') + ' ' + (d.comunidad_nombre || '') + ' ' + (d.usuario_nombre || '') + ' ' + (d.resultado || '') + ' ' + (d.guardia_nombre || '') + ' ' + (d.estado_texto || '')).toLowerCase().trim();
+            var espera;
+            if (d.espera != null && d.espera !== '') {
+                var n = Number(d.espera);
+                var cls = n < 30 ? 'badge-success' : (n <= 60 ? 'badge-warn' : 'badge-danger');
+                espera = '<span class="badge ' + cls + '">' + e(String(d.espera)) + ' s</span>';
+            } else {
+                espera = '—';
+            }
             var modo = d.modo
                 ? '<span class="badge ' + disparoBadgeClase(d.estado) + '">' + e(d.modo) + '</span>'
                 : '—';
@@ -5136,9 +6063,9 @@
                 '<td>' + modo + '</td>' +
                 '<td>' + e(abmFecha(d.fecha) || '—') + '</td>' +
                 '<td>' + e(d.comunidad_nombre || '—') + '</td>' +
-                '<td>' + e(d.casa_nombre || '—') + '</td>' +
+                '<td>' + e(d.usuario_nombre || '—') + '</td>' +
+                '<td>' + e(d.guardia_nombre || '—') + '</td>' +
                 '<td>' + e(d.resultado || '—') + '</td>' +
-                '<td>' + cerrado + '</td>' +
                 '<td>' + espera + '</td>' +
                 '<td>' + e(estadoTxt) + '</td>' +
                 '<td style="text-align:center;">' +

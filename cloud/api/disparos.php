@@ -291,15 +291,17 @@ function disparos_listar(PDO $pdo, array $opts = []): array
         $params[':hasta'] = $hasta . ' 23:59:59';
     }
 
-    $sql = "SELECT d.id, d.fecha, d.comunidad, d.casa, d.modo, d.resultado,
+    $sql = "SELECT d.id, d.fecha, d.comunidad, d.casa, d.usuario, d.modo, d.resultado,
                    d.cerrado, d.espera, d.estado, d.guardia,
                    c.nombre  AS comunidad_nombre,
                    ca.nombre AS casa_nombre,
+                   u.nombre  AS usuario_nombre,
                    g.nombre  AS guardia_nombre,
                    est.texto AS estado_texto
               FROM disparos d
               LEFT JOIN comunidades c  ON c.id    = d.comunidad
               LEFT JOIN casas       ca ON ca.id   = d.casa
+              LEFT JOIN usuarios    u  ON u.id    = d.usuario
               LEFT JOIN guardias    g  ON g.id    = d.guardia
               LEFT JOIN estados     est ON est.campo = 'disparo.estado' AND est.valor = d.estado";
     if ($where) {

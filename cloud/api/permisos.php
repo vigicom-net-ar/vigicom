@@ -1,14 +1,14 @@
 <?php
 /**
- * Endpoint REST de gestión de roles del panel.
+ * Endpoint REST de gestión de permisos del panel.
  *
- *   GET    /api/roles.php          → { roles, kpis }
- *   GET    /api/roles.php?id=N     → rol individual
- *   POST   /api/roles.php          → crear (body JSON)
- *   PUT    /api/roles.php?id=N     → actualizar (body JSON)
- *   DELETE /api/roles.php?id=N     → eliminar
+ *   GET    /api/permisos.php          → { permisos, kpis }
+ *   GET    /api/permisos.php?id=N     → permiso individual
+ *   POST   /api/permisos.php          → crear (body JSON)
+ *   PUT    /api/permisos.php?id=N     → actualizar (body JSON)
+ *   DELETE /api/permisos.php?id=N     → eliminar
  *
- * Los roles marcados como de sistema (sistema = '1') no se pueden eliminar.
+ * Los permisos marcados como de sistema (sistema = '1') no se pueden eliminar.
  */
 
 require_once __DIR__ . '/bootstrap.php';
@@ -24,36 +24,33 @@ try {
 
         case 'GET':
             if ($id > 0) {
-                json_ok(rol_get($pdo, $id));
+                json_ok(permiso_get($pdo, $id));
             }
             json_ok([
-                'roles' => roles_listar($pdo, $_GET),
-                'kpis'  => roles_kpis($pdo),
+                'permisos' => permisos_listar($pdo, $_GET),
+                'kpis'     => permisos_kpis($pdo),
             ]);
             break;
 
         case 'POST':
-            $datos = rol_leer_body();
-            rol_validar_payload($datos);
-            if (rol_nombre_duplicado($pdo, $datos['nombre'])) {
-                json_error('Ya existe un rol con ese nombre.', 409);
+            $datos = permiso_leer_body();
+            permiso_validar_payload($datos);
+            if (permiso_nombre_duplicado($pdo, $datos['nombre'])) {
+                json_error('Ya existe un permiso con ese nombre.', 409);
             }
-            if ($datos['slug'] !== null && rol_slug_duplicado($pdo, $datos['slug'])) {
-                json_error('Ya existe un rol con ese slug.', 409);
+            if ($datos['slug'] !== null && permiso_slug_duplicado($pdo, $datos['slug'])) {
+                json_error('Ya existe un permiso con ese slug.', 409);
             }
 
             $stmt = $pdo->prepare(
-                'INSERT INTO roles (sistema, nombre, slug, descripcion, permisos, menus, widgets)
-                 VALUES (:sistema, :nombre, :slug, :descripcion, :permisos, :menus, :widgets)'
+                'INSERT INTO permisos (sistema, nombre, slug, descripcion)
+                 VALUES (:sistema, :nombre, :slug, :descripcion)'
             );
             $stmt->execute([
                 ':sistema'     => $datos['sistema'],
                 ':nombre'      => $datos['nombre'],
                 ':slug'        => $datos['slug'],
                 ':descripcion' => $datos['descripcion'],
-                ':permisos'    => $datos['permisos'],
-                ':menus'       => $datos['menus'],
-                ':widgets'     => $datos['widgets'],
             ]);
             json_ok(['id' => (int) $pdo->lastInsertId()]);
             break;
@@ -62,24 +59,21 @@ try {
             if ($id <= 0) {
                 json_error('ID inválido.', 422);
             }
-            $datos = rol_leer_body();
-            rol_validar_payload($datos);
-            if (rol_nombre_duplicado($pdo, $datos['nombre'], $id)) {
-                json_error('Ya existe otro rol con ese nombre.', 409);
+            $datos = permiso_leer_body();
+            permiso_validar_payload($datos);
+            if (permiso_nombre_duplicado($pdo, $datos['nombre'], $id)) {
+                json_error('Ya existe otro permiso con ese nombre.', 409);
             }
-            if ($datos['slug'] !== null && rol_slug_duplicado($pdo, $datos['slug'], $id)) {
-                json_error('Ya existe otro rol con ese slug.', 409);
+            if ($datos['slug'] !== null && permiso_slug_duplicado($pdo, $datos['slug'], $id)) {
+                json_error('Ya existe otro permiso con ese slug.', 409);
             }
 
             $stmt = $pdo->prepare(
-                'UPDATE roles
+                'UPDATE permisos
                     SET sistema     = :sistema,
                         nombre      = :nombre,
                         slug        = :slug,
-                        descripcion = :descripcion,
-                        permisos    = :permisos,
-                        menus       = :menus,
-                        widgets     = :widgets
+                        descripcion = :descripcion
                   WHERE id = :id'
             );
             $stmt->execute([
@@ -87,9 +81,6 @@ try {
                 ':nombre'      => $datos['nombre'],
                 ':slug'        => $datos['slug'],
                 ':descripcion' => $datos['descripcion'],
-                ':permisos'    => $datos['permisos'],
-                ':menus'       => $datos['menus'],
-                ':widgets'     => $datos['widgets'],
                 ':id'          => $id,
             ]);
             json_ok();
@@ -99,11 +90,11 @@ try {
             if ($id <= 0) {
                 json_error('ID inválido.', 422);
             }
-            $rol = rol_get($pdo, $id);
-            if ((string) ($rol['sistema'] ?? '') === '1') {
-                json_error('No se puede eliminar un rol de sistema.', 409);
+            $permiso = permiso_get($pdo, $id);
+            if ((string) ($permiso['sistema'] ?? '') === '1') {
+                json_error('No se puede eliminar un permiso de sistema.', 409);
             }
-            $stmt = $pdo->prepare('DELETE FROM roles WHERE id = :id');
+            $stmt = $pdo->prepare('DELETE FROM permisos WHERE id = :id');
             $stmt->execute([':id' => $id]);
             json_ok();
             break;
@@ -118,27 +109,21 @@ try {
 
 // --- Helpers ----------------------------------------------------------------
 
-function rol_leer_body(): array
+function permiso_leer_body(): array
 {
     $raw  = file_get_contents('php://input') ?: '';
     $body = json_decode($raw, true);
     return is_array($body) ? $body : [];
 }
 
-function rol_validar_payload(array &$datos): void
+function permiso_validar_payload(array &$datos): void
 {
     $datos['nombre']      = trim((string) ($datos['nombre']      ?? ''));
     $datos['slug']        = trim((string) ($datos['slug']        ?? ''));
     $datos['descripcion'] = trim((string) ($datos['descripcion'] ?? ''));
-    $datos['permisos']    = (string) ($datos['permisos'] ?? '');
-    $datos['menus']       = (string) ($datos['menus']    ?? '');
-    $datos['widgets']     = (string) ($datos['widgets']  ?? '');
 
     $datos['slug']        = $datos['slug']        !== '' ? strtolower($datos['slug']) : null;
     $datos['descripcion'] = $datos['descripcion'] !== '' ? $datos['descripcion']      : null;
-    $datos['permisos']    = $datos['permisos']    !== '' ? $datos['permisos']         : null;
-    $datos['menus']       = $datos['menus']       !== '' ? $datos['menus']            : null;
-    $datos['widgets']     = $datos['widgets']     !== '' ? $datos['widgets']          : null;
     $datos['sistema']     = !empty($datos['sistema']) ? '1' : null;
 
     if ($datos['nombre'] === '') {
@@ -160,9 +145,9 @@ function rol_validar_payload(array &$datos): void
     }
 }
 
-function rol_nombre_duplicado(PDO $pdo, string $nombre, int $excluir_id = 0): bool
+function permiso_nombre_duplicado(PDO $pdo, string $nombre, int $excluir_id = 0): bool
 {
-    $sql = 'SELECT id FROM roles WHERE nombre = :nombre';
+    $sql = 'SELECT id FROM permisos WHERE nombre = :nombre';
     if ($excluir_id > 0) {
         $sql .= ' AND id <> :id';
     }
@@ -176,9 +161,9 @@ function rol_nombre_duplicado(PDO $pdo, string $nombre, int $excluir_id = 0): bo
     return (bool) $stmt->fetchColumn();
 }
 
-function rol_slug_duplicado(PDO $pdo, string $slug, int $excluir_id = 0): bool
+function permiso_slug_duplicado(PDO $pdo, string $slug, int $excluir_id = 0): bool
 {
-    $sql = 'SELECT id FROM roles WHERE slug = :slug';
+    $sql = 'SELECT id FROM permisos WHERE slug = :slug';
     if ($excluir_id > 0) {
         $sql .= ' AND id <> :id';
     }
@@ -192,23 +177,23 @@ function rol_slug_duplicado(PDO $pdo, string $slug, int $excluir_id = 0): bool
     return (bool) $stmt->fetchColumn();
 }
 
-function rol_get(PDO $pdo, int $id): array
+function permiso_get(PDO $pdo, int $id): array
 {
     $stmt = $pdo->prepare(
-        'SELECT id, sistema, nombre, slug, descripcion, permisos, menus, widgets
-           FROM roles
+        'SELECT id, sistema, nombre, slug, descripcion
+           FROM permisos
           WHERE id = :id
           LIMIT 1'
     );
     $stmt->execute([':id' => $id]);
-    $r = $stmt->fetch();
-    if (!$r) {
-        json_error('Rol no encontrado.', 404);
+    $p = $stmt->fetch();
+    if (!$p) {
+        json_error('Permiso no encontrado.', 404);
     }
-    return $r;
+    return $p;
 }
 
-function roles_listar(PDO $pdo, array $opts = []): array
+function permisos_listar(PDO $pdo, array $opts = []): array
 {
     $sortCols = [
         'id'          => 'id',
@@ -255,7 +240,7 @@ function roles_listar(PDO $pdo, array $opts = []): array
         $where[] = "(sistema IS NULL OR sistema <> '1')";
     }
 
-    $sql = 'SELECT id, sistema, nombre, slug, descripcion FROM roles';
+    $sql = 'SELECT id, sistema, nombre, slug, descripcion FROM permisos';
     if ($where) {
         $sql .= ' WHERE ' . implode(' AND ', $where);
     }
@@ -266,11 +251,11 @@ function roles_listar(PDO $pdo, array $opts = []): array
     return $stmt->fetchAll();
 }
 
-function roles_kpis(PDO $pdo): array
+function permisos_kpis(PDO $pdo): array
 {
     return [
-        'total'   => (int) $pdo->query('SELECT COUNT(*) FROM roles')->fetchColumn(),
-        'sistema' => (int) $pdo->query("SELECT COUNT(*) FROM roles WHERE sistema = '1'")->fetchColumn(),
-        'custom'  => (int) $pdo->query("SELECT COUNT(*) FROM roles WHERE sistema IS NULL OR sistema <> '1'")->fetchColumn(),
+        'total'   => (int) $pdo->query('SELECT COUNT(*) FROM permisos')->fetchColumn(),
+        'sistema' => (int) $pdo->query("SELECT COUNT(*) FROM permisos WHERE sistema = '1'")->fetchColumn(),
+        'custom'  => (int) $pdo->query("SELECT COUNT(*) FROM permisos WHERE sistema IS NULL OR sistema <> '1'")->fetchColumn(),
     ];
 }
