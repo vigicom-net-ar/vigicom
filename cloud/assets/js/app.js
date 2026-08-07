@@ -2020,7 +2020,7 @@
 
             '<div class="table-card">' +
                 '<table><thead><tr>' +
-                    '<th>Código</th><th>Nombre</th><th>Contacto</th><th>Comunidad</th><th>Rol</th><th>Estado</th>' +
+                    '<th>Código</th><th>Nombre</th><th>Teléfono</th><th>Correo</th><th>Comunidad</th><th>Rol</th><th>Estado</th>' +
                     '<th style="text-align:center;">Acciones</th>' +
                 '</tr></thead><tbody id="usrTbody">' +
                 renderFilasUsuarios(usuarios) +
@@ -2042,21 +2042,16 @@
 
     function renderFilasUsuarios(usuarios) {
         if (!usuarios.length) {
-            return '<tr><td colspan="7" class="table-empty">No hay usuarios cargados.</td></tr>';
+            return '<tr><td colspan="8" class="table-empty">No hay usuarios cargados.</td></tr>';
         }
         return usuarios.map(function (u) {
             var estado = parseInt(u.estado, 10) === 1 ? 1 : 0;
             var busq   = String((u.nombre || '') + ' ' + (u.correo || '') + ' ' + (u.dni || '') + ' ' + (u.telefono || '')).toLowerCase().trim();
             return '<tr data-id="' + u.id + '" data-estado="' + estado + '" data-search="' + e(busq) + '" style="cursor:pointer;">' +
                 '<td class="td-id">#' + u.id + '</td>' +
-                '<td>' +
-                    '<div class="td-nombre">' + e(u.nombre || '—') + '</div>' +
-                    (u.dni ? '<div class="td-id">DNI ' + e(u.dni) + '</div>' : '') +
-                '</td>' +
-                '<td>' +
-                    '<div>' + e(u.correo || '—') + '</div>' +
-                    (u.telefono ? '<div class="td-id">' + e(u.telefono) + '</div>' : '') +
-                '</td>' +
+                '<td><div class="td-nombre">' + e(u.nombre || '—') + '</div></td>' +
+                '<td>' + e(u.telefono || '—') + '</td>' +
+                '<td>' + e(u.correo || '—') + '</td>' +
                 '<td>' + e(u.comunidad_nombre || '—') + '</td>' +
                 '<td>' + e(u.roles || '—') + '</td>' +
                 '<td>' +
@@ -4994,11 +4989,12 @@
         nombre:    '',
         comunidad: '',
         estado:    '',
-        conexion:  ''
+        conexion:  '',
+        q:         ''
     };
     var alarmasFiltros         = Object.assign({}, alarmasFiltrosDefault);
     var alarmasFiltrosSnapshot = null;
-    var alarmasCache           = { comunidades: [], onlineSec: 600 };
+    var alarmasCache           = { comunidades: [], onlineSec: 600, estados: {} };
     var alarmasRegistroCache   = {};
 
     function alarmasQueryString() {
@@ -5015,7 +5011,7 @@
     function alarmasFiltrosActivos() {
         var n = 0;
         Object.keys(alarmasFiltrosDefault).forEach(function (k) {
-            if (k === 'sort' || k === 'dir' || k === 'limit') return;
+            if (k === 'sort' || k === 'dir' || k === 'limit' || k === 'q') return;
             if (String(alarmasFiltros[k]) !== String(alarmasFiltrosDefault[k])) n++;
         });
         return n;
@@ -5059,8 +5055,8 @@
         return '<div class="toolbar">' +
             '<div class="toolbar-left" style="gap:8px;flex-wrap:wrap;">' +
                 '<div class="search-wrap">' +
-                    '<input type="search" id="alaSearch" class="search-input" placeholder="🔍 Buscar nombre, identidad o domicilio…">' +
-                    '<button class="search-clear" id="alaSearchClear" type="button" style="display:none;">&times;</button>' +
+                    '<input type="search" id="alaSearch" class="search-input" placeholder="🔍 Buscar nombre, identidad o domicilio…" value="' + e(alarmasFiltros.q || '') + '">' +
+                    '<button class="search-clear" id="alaSearchClear" type="button" style="display:' + (alarmasFiltros.q ? '' : 'none') + ';">&times;</button>' +
                 '</div>' +
                 '<button class="btn btn-ghost btn-icon' + activo + '" id="alaFiltros" type="button" title="Filtros">' +
                     '<i class="fa-solid fa-filter"></i>' + badge +
@@ -5097,6 +5093,7 @@
             var kpis    = data.kpis        || {};
             alarmasCache.comunidades = data.comunidades             || [];
             alarmasCache.onlineSec   = data.online_interval_seconds || 600;
+            alarmasCache.estados     = data.estados_opciones        || {};
             alarmasRegistroCache     = {};
             var stats = document.getElementById('alaStats');
             var tbody = document.getElementById('alaTbody');
@@ -5105,8 +5102,6 @@
             if (tbody) tbody.innerHTML = renderFilasAlarmas(alarmas, alarmasCache.onlineSec);
             if (count) count.textContent = alarmasCountText(alarmas.length);
             actualizarBadgeFiltrosAlarmas();
-            var searchInput = document.getElementById('alaSearch');
-            if (searchInput) searchInput.dispatchEvent(new Event('input'));
         } catch (err) {
             toast(err.message, true);
         }
@@ -5118,6 +5113,7 @@
         var kpis    = data.kpis        || {};
         alarmasCache.comunidades = data.comunidades             || [];
         alarmasCache.onlineSec   = data.online_interval_seconds || 600;
+        alarmasCache.estados     = data.estados_opciones        || {};
         alarmasRegistroCache     = {};
 
         view.innerHTML =
@@ -5134,13 +5130,12 @@
                 '</tr></thead><tbody id="alaTbody">' +
                 renderFilasAlarmas(alarmas, alarmasCache.onlineSec) +
                 '</tbody></table>' +
-                '<div class="table-empty" id="alaEmpty" style="display:none;">No hay alarmas que coincidan con la búsqueda.</div>' +
             '</div>' +
             '<div class="text-muted text-sm" id="alaCount" style="margin-top:10px;">' +
                 alarmasCountText(alarmas.length) +
             '</div>' +
 
-            modalAlarmaHtml(alarmasCache.comunidades) +
+            modalAlarmaHtml(alarmasCache.comunidades, alarmasCache.estados) +
             modalFiltrosAlarmasHtml(alarmasCache.comunidades) +
             modalConsultarAlarmaHtml() +
             confirmDeleteAlarmaHtml() +
@@ -5151,7 +5146,10 @@
 
     function renderFilasAlarmas(alarmas, onlineSec) {
         if (!alarmas.length) {
-            return '<tr><td colspan="7" class="table-empty">No hay alarmas cargadas.</td></tr>';
+            var msg = alarmasFiltros.q
+                ? 'No hay alarmas que coincidan con la búsqueda.'
+                : 'No hay alarmas cargadas.';
+            return '<tr><td colspan="7" class="table-empty">' + msg + '</td></tr>';
         }
         return alarmas.map(function (a) {
             var online = a.latido && ((Date.now() - new Date(a.latido).getTime()) / 1000 <= onlineSec);
@@ -5189,7 +5187,18 @@
         }).join('');
     }
 
-    function modalAlarmaHtml(comunidades) {
+    // Opciones de un campo en estados_opciones -> <option>. Si no hay filas
+    // para ese campo, devuelve solo el placeholder para que el select no
+    // quede vacio.
+    function estadosOptions(estados, campo, placeholder) {
+        var lista = (estados && estados[campo]) || [];
+        var head  = '<option value="">' + e(placeholder || '— Seleccionar —') + '</option>';
+        return head + lista.map(function (o) {
+            return '<option value="' + e(o.valor) + '">' + e(o.texto || o.valor) + '</option>';
+        }).join('');
+    }
+
+    function modalAlarmaHtml(comunidades, estados) {
         var opts = comunidades.map(function (c) {
             return '<option value="' + c.id + '">' + e(c.nombre) + '</option>';
         }).join('');
@@ -5218,7 +5227,9 @@
                         '<div class="form-group"><label for="ala-identidad">Identidad</label>' +
                             '<input id="ala-identidad" name="identidad" type="text" maxlength="50" placeholder="UID"></div>' +
                         '<div class="form-group"><label for="ala-tipo">Tipo</label>' +
-                            '<input id="ala-tipo" name="tipo" type="text" maxlength="1" placeholder="A/B/C..."></div>' +
+                            '<select id="ala-tipo" name="tipo">' +
+                                estadosOptions(estados, 'alarma.tipo') +
+                            '</select></div>' +
                     '</div>' +
                     '<div class="form-row">' +
                         '<div class="form-group" style="flex:1 1 100%;"><label for="ala-domicilio">Domicilio</label>' +
@@ -5227,12 +5238,24 @@
                     '<div class="form-row">' +
                         '<div class="form-group"><label for="ala-ciudad">Ciudad</label>' +
                             '<input id="ala-ciudad" name="ciudad" type="text" maxlength="50"></div>' +
-                        '<div class="form-group"><label>Estado</label>' +
-                            '<label class="toggle-switch" style="margin-top:6px;">' +
-                                '<input id="ala-estado" name="estado" type="checkbox" value="1" checked>' +
-                                '<span class="toggle-track"><span class="toggle-thumb"></span></span>' +
-                                '<span class="toggle-label" id="alaEstadoLabel">Activa</span>' +
-                            '</label></div>' +
+                        '<div class="form-group"><label for="ala-estado">Estado</label>' +
+                            '<select id="ala-estado" name="estado">' +
+                                estadosOptions(estados, 'alarma.estado') +
+                            '</select></div>' +
+                    '</div>' +
+                    '<div class="form-row form-row-3">' +
+                        '<div class="form-group"><label for="ala-comunicacion">Comunicación</label>' +
+                            '<select id="ala-comunicacion" name="comunicacion">' +
+                                estadosOptions(estados, 'alarma.comunicacion') +
+                            '</select></div>' +
+                        '<div class="form-group"><label for="ala-prioridad">Prioridad</label>' +
+                            '<select id="ala-prioridad" name="prioridad">' +
+                                estadosOptions(estados, 'alarma.prioridad') +
+                            '</select></div>' +
+                        '<div class="form-group"><label for="ala-altura">Altura</label>' +
+                            '<select id="ala-altura" name="altura">' +
+                                estadosOptions(estados, 'alarma.altura') +
+                            '</select></div>' +
                     '</div>' +
                     '<div class="form-row form-row-3">' +
                         '<div class="form-group"><label for="ala-hardware">Hardware</label>' +
@@ -5240,7 +5263,16 @@
                         '<div class="form-group"><label for="ala-firmware">Firmware</label>' +
                             '<input id="ala-firmware" name="firmware" type="text" maxlength="50"></div>' +
                         '<div class="form-group"><label for="ala-revision">Revisión</label>' +
-                            '<input id="ala-revision" name="revision" type="text" maxlength="50"></div>' +
+                            '<select id="ala-revision" name="revision">' +
+                                estadosOptions(estados, 'alarma.revision') +
+                            '</select></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="ala-titularidad">Titularidad</label>' +
+                            '<select id="ala-titularidad" name="titularidad">' +
+                                estadosOptions(estados, 'alarma.titularidad') +
+                            '</select></div>' +
+                        '<div class="form-group"></div>' +
                     '</div>' +
                     '<div class="form-row">' +
                         '<div class="form-group"><label for="ala-latitud">Latitud</label>' +
@@ -5319,7 +5351,7 @@
     }
 
     function modalConsultarAlarmaHtml() {
-        return '<div class="modal-backdrop" id="alaConsultar"><div class="modal">' +
+        return '<div class="modal-backdrop" id="alaConsultar"><div class="modal modal-xl">' +
             '<div class="modal-header">' +
                 '<div class="modal-title">' +
                     '<span>Consultar alarma</span>' +
@@ -5328,7 +5360,33 @@
                 '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
             '</div>' +
             '<div class="modal-body">' +
-                '<dl class="data-list" id="alaConsultarBody"></dl>' +
+                '<div class="ala-tabs" role="tablist">' +
+                    '<button type="button" class="ala-tab active" role="tab" data-tab="general">General</button>' +
+                    '<button type="button" class="ala-tab" role="tab" data-tab="detalles">Detalles</button>' +
+                    '<button type="button" class="ala-tab" role="tab" data-tab="controles">Controles</button>' +
+                    '<button type="button" class="ala-tab" role="tab" data-tab="senales">Señales</button>' +
+                '</div>' +
+                '<div class="ala-tabpanel" id="alaTabGeneral" role="tabpanel">' +
+                    '<dl class="data-list" id="alaConsultarBodyGeneral"></dl>' +
+                '</div>' +
+                '<div class="ala-tabpanel" id="alaTabDetalles" role="tabpanel" hidden>' +
+                    '<dl class="data-list" id="alaConsultarBodyDetalles"></dl>' +
+                '</div>' +
+                '<div class="ala-tabpanel" id="alaTabControles" role="tabpanel" hidden>' +
+                    '<div class="ala-controles-botones" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">' +
+                        '<button type="button" class="ala-cmd-btn" data-cmd="reiniciar" data-tooltip="Reiniciar" aria-label="Reiniciar">' +
+                            '<i class="fa-solid fa-power-off"></i>' +
+                        '</button>' +
+                        '<button type="button" class="ala-cmd-btn" data-cmd="firmware" data-tooltip="Actualizar firmware" aria-label="Actualizar firmware">' +
+                            '<i class="fa-solid fa-microchip"></i>' +
+                        '</button>' +
+                    '</div>' +
+                    '<div class="text-muted text-sm" style="margin-bottom:8px;">Últimas 10 señales</div>' +
+                    '<div id="alaControlesSenales"></div>' +
+                '</div>' +
+                '<div class="ala-tabpanel" id="alaTabSenales" role="tabpanel" hidden>' +
+                    '<div id="alaSenalesBody"></div>' +
+                '</div>' +
             '</div>' +
             '<div class="modal-footer">' +
                 '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
@@ -5352,7 +5410,6 @@
 
     function wireAlarmasView() {
         var tbody       = document.getElementById('alaTbody');
-        var emptyState  = document.getElementById('alaEmpty');
         var searchInput = document.getElementById('alaSearch');
         var searchClear = document.getElementById('alaSearchClear');
 
@@ -5363,7 +5420,6 @@
         var form        = document.getElementById('alaForm');
         var fId         = document.getElementById('alaId');
         var fEstado     = document.getElementById('ala-estado');
-        var estadoLabel = document.getElementById('alaEstadoLabel');
         var btnGuardar  = document.getElementById('alaGuardar');
 
         var confirmBox = document.getElementById('alaConfirm');
@@ -5372,10 +5428,165 @@
 
         var filtrosModal = document.getElementById('alaFiltrosModal');
 
-        var consultarModal  = document.getElementById('alaConsultar');
-        var consultarSub    = document.getElementById('alaConsultarSub');
-        var consultarBody   = document.getElementById('alaConsultarBody');
-        var consultarEditar = document.getElementById('alaConsultarEditar');
+        var consultarModal    = document.getElementById('alaConsultar');
+        var consultarSub      = document.getElementById('alaConsultarSub');
+        var consultarGeneral  = document.getElementById('alaConsultarBodyGeneral');
+        var consultarDetalles = document.getElementById('alaConsultarBodyDetalles');
+        var consultarSenales  = document.getElementById('alaSenalesBody');
+        var consultarControles       = document.getElementById('alaControlesSenales');
+        var consultarControlesBtns   = document.querySelector('#alaTabControles .ala-controles-botones');
+        var consultarTabs     = consultarModal.querySelector('.ala-tabs');
+        var consultarPGen     = document.getElementById('alaTabGeneral');
+        var consultarPDet     = document.getElementById('alaTabDetalles');
+        var consultarPCtrl    = document.getElementById('alaTabControles');
+        var consultarPSen     = document.getElementById('alaTabSenales');
+        var consultarEditar   = document.getElementById('alaConsultarEditar');
+
+        var senalesTabState   = { current: null }; // id cargado en la pestaña Señales
+        var controlesTabState = { current: null }; // id cargado en la pestaña Controles
+        var controlesPollTimer = null;
+
+        function detenerPollControles() {
+            if (controlesPollTimer) {
+                clearInterval(controlesPollTimer);
+                controlesPollTimer = null;
+            }
+        }
+        function iniciarPollControles(id) {
+            detenerPollControles();
+            controlesPollTimer = setInterval(function () {
+                if (consultarIdActual !== id || !consultarModal.classList.contains('open')) {
+                    detenerPollControles();
+                    return;
+                }
+                cargarSenalesEn(id, consultarControles, 10, controlesTabState, true);
+            }, 1000);
+        }
+
+        function alaCambiarTab(tab) {
+            consultarTabs.querySelectorAll('.ala-tab').forEach(function (t) {
+                t.classList.toggle('active', t.getAttribute('data-tab') === tab);
+            });
+            consultarPGen.setAttribute('hidden', '');
+            consultarPDet.setAttribute('hidden', '');
+            consultarPCtrl.setAttribute('hidden', '');
+            consultarPSen.setAttribute('hidden', '');
+            if (tab === 'detalles')       consultarPDet.removeAttribute('hidden');
+            else if (tab === 'controles') consultarPCtrl.removeAttribute('hidden');
+            else if (tab === 'senales')   consultarPSen.removeAttribute('hidden');
+            else                           consultarPGen.removeAttribute('hidden');
+
+            if (tab === 'senales' && senalesTabState.current !== consultarIdActual) {
+                cargarSenalesEn(consultarIdActual, consultarSenales, 50, senalesTabState);
+            } else if (tab === 'controles') {
+                if (controlesTabState.current !== consultarIdActual) {
+                    cargarSenalesEn(consultarIdActual, consultarControles, 10, controlesTabState);
+                }
+                iniciarPollControles(consultarIdActual);
+            }
+
+            if (tab !== 'controles') detenerPollControles();
+        }
+        consultarTabs.addEventListener('click', function (ev) {
+            var btn = ev.target.closest('.ala-tab');
+            if (!btn) return;
+            var tab = btn.getAttribute('data-tab');
+            if (tab) alaCambiarTab(tab);
+        });
+
+        var comandosLabels = { reiniciar: 'Reiniciar', firmware: 'Actualizar firmware' };
+        consultarControlesBtns.addEventListener('click', function (ev) {
+            var btn = ev.target.closest('button[data-cmd]');
+            if (!btn || consultarIdActual == null) return;
+            var cmd = btn.getAttribute('data-cmd');
+            toast('Comando “' + (comandosLabels[cmd] || cmd) + '” enviado a la alarma #' + consultarIdActual + '.');
+        });
+
+        async function cargarSenalesEn(id, target, limit, state, silent) {
+            if (state.inflight) return;
+            state.current = id;
+            state.inflight = true;
+            try {
+            if (!silent) {
+                target.innerHTML =
+                    '<div style="display:flex;justify-content:center;padding:24px"><div class="spin"></div></div>';
+            }
+
+            var a = alarmasRegistroCache[id];
+            var propagacion = a && a.propagacion ? String(a.propagacion).trim() : '';
+            if (!propagacion) {
+                target.innerHTML =
+                    '<div class="table-empty">Esta alarma no tiene <b>propagación</b> asignada; ' +
+                    'no es posible correlacionar señales.</div>';
+                return;
+            }
+
+            var senales;
+            try {
+                var data = await api('/api/senales.php?propagacion=' + encodeURIComponent(propagacion) +
+                                     '&limit=' + limit + '&sort=id&dir=desc');
+                senales = data.senales || [];
+            } catch (err) {
+                if (state.current !== id) return;
+                target.innerHTML = '<div class="alert alert-error">' + e(err.message) + '</div>';
+                state.current = null;
+                return;
+            }
+            if (state.current !== id) return; // el usuario cambió de alarma mientras cargaba
+
+            if (!senales.length) {
+                target.innerHTML =
+                    '<div class="table-empty">No hay señales registradas para esta alarma.</div>';
+                return;
+            }
+
+            var filas = senales.map(function (s) {
+                var texto = (s.texto || '');
+                var textoCorto = texto.length > 80 ? (texto.substring(0, 80) + '…') : texto;
+                var procesada = s.procesada
+                    ? '<span class="badge badge-success">' + e(abmFecha(s.procesada)) + '</span>'
+                    : '<span class="badge badge-warn">Pendiente</span>';
+                var sentidoRaw = String(s.sentido || '').toUpperCase();
+                var sentidoIco;
+                if (sentidoRaw === 'E') {
+                    sentidoIco = '<i class="fa-solid fa-download" style="color:#f59e0b" title="Entrada"></i>';
+                } else if (sentidoRaw === 'S') {
+                    sentidoIco = '<i class="fa-solid fa-upload" style="color:#38bdf8" title="Salida"></i>';
+                } else {
+                    sentidoIco = e(s.sentido || '—');
+                }
+                var estadoRaw = String(s.estado || '').trim();
+                var estadoIco;
+                if (estadoRaw === '1') {
+                    estadoIco = '<i class="fa-solid fa-check" style="color:var(--muted)" title="Estado 1"></i>';
+                } else if (estadoRaw === '2') {
+                    estadoIco = '<i class="fa-solid fa-check-double" style="color:var(--success)" title="Estado 2"></i>';
+                } else {
+                    estadoIco = '<i class="fa-solid fa-clock" style="color:var(--muted)" title="Pendiente"></i>';
+                }
+                return '<tr>' +
+                    '<td class="td-id">#' + s.id + '</td>' +
+                    '<td>' + e(abmFecha(s.fecha) || '—') + '</td>' +
+                    '<td style="text-align:center;">' + sentidoIco + '</td>' +
+                    '<td title="' + e(texto) + '">' + e(textoCorto || '—') + '</td>' +
+                    '<td>' + procesada + '</td>' +
+                    '<td style="text-align:center;">' + estadoIco + '</td>' +
+                '</tr>';
+            }).join('');
+
+            target.innerHTML =
+                '<div class="table-card">' +
+                    '<table><thead><tr>' +
+                        '<th>Código</th><th>Fecha</th>' +
+                        '<th style="text-align:center;">Sentido</th>' +
+                        '<th>Texto</th><th>Procesada</th>' +
+                        '<th style="text-align:center;">Estado</th>' +
+                    '</tr></thead><tbody>' + filas + '</tbody></table>' +
+                '</div>';
+            } finally {
+                state.inflight = false;
+            }
+        }
 
         var ctxMenu = document.getElementById('alaCtxMenu');
         var ctxId   = null;
@@ -5384,23 +5595,31 @@
         var modoEdicion       = false;
         var consultarIdActual = null;
 
-        // --- Búsqueda rápida cliente ------------------------------------
-        function applyClientFilter() {
-            var q = searchInput.value.trim().toLowerCase();
-            var visibles = 0;
-            tbody.querySelectorAll('tr[data-id]').forEach(function (tr) {
-                var haystack = tr.dataset.search || '';
-                var show = !q || haystack.indexOf(q) !== -1;
-                tr.style.display = show ? '' : 'none';
-                if (show) visibles++;
-            });
-            emptyState.style.display = (visibles === 0 && tbody.querySelector('tr[data-id]')) ? '' : 'none';
-            searchClear.style.display = q ? '' : 'none';
+        // --- Búsqueda rápida contra la base ------------------------------
+        var busquedaTimer = null;
+        function lanzarBusquedaServidor() {
+            var val = searchInput.value.trim();
+            searchClear.style.display = val ? '' : 'none';
+            if (alarmasFiltros.q === val) return;
+            alarmasFiltros.q = val;
+            recargarAlarmasLista();
         }
-        searchInput.addEventListener('input', applyClientFilter);
+        searchInput.addEventListener('input', function () {
+            searchClear.style.display = searchInput.value ? '' : 'none';
+            clearTimeout(busquedaTimer);
+            busquedaTimer = setTimeout(lanzarBusquedaServidor, 300);
+        });
+        searchInput.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Enter') {
+                ev.preventDefault();
+                clearTimeout(busquedaTimer);
+                lanzarBusquedaServidor();
+            }
+        });
         searchClear.addEventListener('click', function () {
             searchInput.value = '';
-            applyClientFilter();
+            clearTimeout(busquedaTimer);
+            lanzarBusquedaServidor();
             searchInput.focus();
         });
 
@@ -5555,59 +5774,84 @@
         consultarModal.addEventListener('click', function (ev) {
             if (ev.target === consultarModal || ev.target.closest('[data-act="close"]')) {
                 consultarModal.classList.remove('open');
+                detenerPollControles();
             }
         });
         consultarEditar.addEventListener('click', function () {
             if (consultarIdActual == null) return;
             consultarModal.classList.remove('open');
+            detenerPollControles();
             abrirEdicion(consultarIdActual);
         });
 
         async function abrirConsulta(id) {
+            detenerPollControles();
             consultarIdActual = id;
-            consultarSub.innerHTML  = '<code>#' + id + '</code>';
-            consultarBody.innerHTML = '<div style="display:flex;justify-content:center;padding:24px"><div class="spin"></div></div>';
+            senalesTabState.current   = null;
+            controlesTabState.current = null;
+            consultarSub.innerHTML       = '<code>#' + id + '</code>';
+            var spinner = '<div style="display:flex;justify-content:center;padding:24px"><div class="spin"></div></div>';
+            consultarGeneral.innerHTML   = spinner;
+            consultarDetalles.innerHTML  = '';
+            consultarSenales.innerHTML   = '';
+            consultarControles.innerHTML = '';
+            alaCambiarTab('general');
             consultarModal.classList.add('open');
 
             var a;
             try {
                 a = alarmasRegistroCache[id] || (alarmasRegistroCache[id] = await api('/api/alarmas.php?id=' + id));
             } catch (err) {
-                consultarBody.innerHTML = '<div class="alert alert-error">' + e(err.message) + '</div>';
+                consultarGeneral.innerHTML = '<div class="alert alert-error">' + e(err.message) + '</div>';
                 return;
             }
 
-            var estadoBadge = parseInt(a.estado, 10) === 1
-                ? '<span class="badge badge-success">Activa</span>'
-                : '<span class="badge badge-danger">Inactiva</span>';
+            // Los campos tipo/comunicacion/revision/prioridad/altura/
+            // titularidad/estado se muestran con el texto traducido de la
+            // tabla estados (ver alarma_get). Si no hay match, cae al valor
+            // crudo para no perder informacion.
+            var tipoTxt        = a.tipo_texto        || a.tipo;
+            var comunicaTxt    = a.comunicacion_texto|| a.comunicacion;
+            var revisionTxt    = a.revision_texto    || a.revision;
+            var prioridadTxt   = a.prioridad_texto   || a.prioridad;
+            var alturaTxt      = a.altura_texto      || a.altura;
+            var titularidadTxt = a.titularidad_texto || a.titularidad;
+            var estadoActiva   = parseInt(a.estado, 10) === 1;
+            var estadoBadge    = a.estado_texto
+                ? '<span class="badge ' + (estadoActiva ? 'badge-success' : 'badge-danger') + '">' + e(a.estado_texto) + '</span>'
+                : (estadoActiva
+                    ? '<span class="badge badge-success">Activa</span>'
+                    : '<span class="badge badge-danger">Inactiva</span>');
 
-            consultarSub.innerHTML  = '<code>#' + a.id + '</code>';
-            consultarBody.innerHTML =
+            consultarSub.innerHTML     = '<code>#' + a.id + '</code>';
+            consultarGeneral.innerHTML =
                 abmRow    ('Código',              '<code>#' + a.id + '</code>') +
                 abmRowTxt ('Nombre',               a.nombre) +
+                abmRow    ('Estado',               estadoBadge) +
                 abmRowRef ('Equipo',               a.equipo,    a.equipo_nombre || a.equipo_uuid, 'Sin equipo') +
-                abmRowTxt ('Tipo',                 a.tipo,        'Sin tipo') +
+                abmRowRef ('Comunidad',            a.comunidad, a.comunidad_nombre, 'Sin comunidad') +
+                abmRowTxt ('Domicilio',            a.domicilio,   'Sin domicilio') +
+                abmRowTxt ('Ciudad',               a.ciudad,      'Sin ciudad') +
+                abmRowTxt ('Latitud',              a.latitud,     'Sin latitud') +
+                abmRowTxt ('Longitud',             a.longitud,    'Sin longitud') +
+                abmRowTxt ('Prioridad',            prioridadTxt,  'Sin prioridad') +
+                abmRowTxt ('Instalación',          abmFecha(a.instalacion), 'Sin instalación') +
+                abmRowTxt ('Titularidad',          titularidadTxt,'Sin titularidad');
+
+            consultarDetalles.innerHTML =
+                abmRowTxt ('Tipo',                 tipoTxt,       'Sin tipo') +
                 abmRowTxt ('Generación',           a.generacion,  'Sin generación') +
                 abmRowTxt ('Hardware',             a.hardware,    'Sin hardware') +
                 abmRowTxt ('Firmware',             a.firmware,    'Sin firmware') +
-                abmRowTxt ('Revisión',             a.revision,    'Sin revisión') +
-                abmRowTxt ('Prioridad',            a.prioridad,   'Sin prioridad') +
-                abmRowTxt ('Altura',               a.altura,      'Sin altura') +
-                abmRowTxt ('Comunicación',         a.comunicacion,'Sin comunicación') +
+                abmRowTxt ('Revisión',             revisionTxt,   'Sin revisión') +
+                abmRowTxt ('Altura',               alturaTxt,     'Sin altura') +
+                abmRowTxt ('Comunicación',         comunicaTxt,   'Sin comunicación') +
                 abmRowTxt ('Propagación',          a.propagacion, 'Sin propagación') +
                 abmRowTxt ('Identidad (UID)',      a.identidad,   'Sin identidad') +
-                abmRowRef ('Comunidad',            a.comunidad,   a.comunidad_nombre, 'Sin comunidad') +
-                abmRowTxt ('Domicilio',            a.domicilio,   'Sin domicilio') +
-                abmRowTxt ('Ciudad',               a.ciudad,      'Sin ciudad') +
                 abmRowSiNo('Foto',                 a.foto) +
-                abmRowTxt ('Latitud',              a.latitud,     'Sin latitud') +
-                abmRowTxt ('Longitud',             a.longitud,    'Sin longitud') +
-                abmRowTxt ('Instalación',          abmFecha(a.instalacion),    'Sin instalación') +
                 abmRowTxt ('Atendida',             abmFecha(a.atendida),       'No atendida') +
                 abmRowTxt ('Garantía',             abmFecha(a.garantia),       'Sin garantía') +
                 abmRowTxt ('Desinstalación',       abmFecha(a.desinstalacion), 'No desinstalada') +
-                abmRowTxt ('Titularidad',          a.titularidad, 'Sin titularidad') +
-                abmRow    ('Estado',               estadoBadge) +
                 abmRowTxt ('Disuasión',            a.disuasion,   'Sin disuasión') +
                 abmRowTxt ('Inicio',               abmFecha(a.inicio), 'Sin inicio') +
                 abmRowTxt ('Último latido',        abmFecha(a.latido), 'Sin latido') +
@@ -5622,16 +5866,16 @@
         }
 
         // --- Modal Alta / Edición --------------------------------------
-        function setEstadoLabel() {
-            estadoLabel.textContent = fEstado.checked ? 'Activa' : 'Inactiva';
-        }
-        fEstado.addEventListener('change', setEstadoLabel);
-
         function resetForm() {
             form.reset();
             fId.value = '';
-            fEstado.checked = true;
-            setEstadoLabel();
+            // Estado por defecto = "1" (activa) si la opcion existe en el
+            // select; si no, queda en el placeholder vacio.
+            if (fEstado.querySelector('option[value="1"]')) {
+                fEstado.value = '1';
+            } else {
+                fEstado.value = '';
+            }
         }
         function openModal()  { modal.classList.add('open'); }
         function closeModal() {
@@ -5657,6 +5901,21 @@
             document.getElementById('ala-nombre').focus();
         });
 
+        // Setea el value de un select. Si el valor viene de la BD pero no
+        // esta como opcion en el catalogo estados (por ejemplo se cargo a
+        // mano o el catalogo se recorto), se agrega dinamicamente para no
+        // perderlo al guardar.
+        function setSelectValue(sel, value) {
+            var v = value == null ? '' : String(value);
+            if (v !== '' && !sel.querySelector('option[value="' + v.replace(/"/g, '&quot;') + '"]')) {
+                var opt = document.createElement('option');
+                opt.value = v;
+                opt.textContent = v + ' (no catalogado)';
+                sel.appendChild(opt);
+            }
+            sel.value = v;
+        }
+
         async function abrirEdicion(id) {
             try {
                 var a = alarmasRegistroCache[id] || (alarmasRegistroCache[id] = await api('/api/alarmas.php?id=' + id));
@@ -5668,16 +5927,19 @@
                 document.getElementById('ala-nombre').value    = a.nombre    || '';
                 document.getElementById('ala-comunidad').value = a.comunidad != null ? a.comunidad : '';
                 document.getElementById('ala-identidad').value = a.identidad || '';
-                document.getElementById('ala-tipo').value      = a.tipo      || '';
                 document.getElementById('ala-domicilio').value = a.domicilio || '';
                 document.getElementById('ala-ciudad').value    = a.ciudad    || '';
                 document.getElementById('ala-hardware').value  = a.hardware  || '';
                 document.getElementById('ala-firmware').value  = a.firmware  || '';
-                document.getElementById('ala-revision').value  = a.revision  || '';
                 document.getElementById('ala-latitud').value   = a.latitud   || '';
                 document.getElementById('ala-longitud').value  = a.longitud  || '';
-                fEstado.checked = parseInt(a.estado, 10) === 1;
-                setEstadoLabel();
+                setSelectValue(document.getElementById('ala-tipo'),         a.tipo);
+                setSelectValue(document.getElementById('ala-comunicacion'), a.comunicacion);
+                setSelectValue(document.getElementById('ala-prioridad'),    a.prioridad);
+                setSelectValue(document.getElementById('ala-altura'),       a.altura);
+                setSelectValue(document.getElementById('ala-titularidad'),  a.titularidad);
+                setSelectValue(document.getElementById('ala-revision'),     a.revision);
+                setSelectValue(fEstado,                                     a.estado);
                 openModal();
                 document.getElementById('ala-nombre').focus();
             } catch (err) {
@@ -5721,18 +5983,22 @@
             modalError.style.display = 'none';
 
             var payload = {
-                nombre:    document.getElementById('ala-nombre').value.trim(),
-                comunidad: document.getElementById('ala-comunidad').value || null,
-                identidad: document.getElementById('ala-identidad').value.trim(),
-                tipo:      document.getElementById('ala-tipo').value.trim(),
-                domicilio: document.getElementById('ala-domicilio').value.trim(),
-                ciudad:    document.getElementById('ala-ciudad').value.trim(),
-                hardware:  document.getElementById('ala-hardware').value.trim(),
-                firmware:  document.getElementById('ala-firmware').value.trim(),
-                revision:  document.getElementById('ala-revision').value.trim(),
-                latitud:   document.getElementById('ala-latitud').value.trim(),
-                longitud:  document.getElementById('ala-longitud').value.trim(),
-                estado:    fEstado.checked ? 1 : 0
+                nombre:       document.getElementById('ala-nombre').value.trim(),
+                comunidad:    document.getElementById('ala-comunidad').value || null,
+                identidad:    document.getElementById('ala-identidad').value.trim(),
+                tipo:         document.getElementById('ala-tipo').value,
+                comunicacion: document.getElementById('ala-comunicacion').value,
+                prioridad:    document.getElementById('ala-prioridad').value,
+                altura:       document.getElementById('ala-altura').value,
+                titularidad:  document.getElementById('ala-titularidad').value,
+                domicilio:    document.getElementById('ala-domicilio').value.trim(),
+                ciudad:       document.getElementById('ala-ciudad').value.trim(),
+                hardware:     document.getElementById('ala-hardware').value.trim(),
+                firmware:     document.getElementById('ala-firmware').value.trim(),
+                revision:     document.getElementById('ala-revision').value,
+                latitud:      document.getElementById('ala-latitud').value.trim(),
+                longitud:     document.getElementById('ala-longitud').value.trim(),
+                estado:       parseInt(fEstado.value, 10) === 1 ? 1 : 0
             };
 
             btnGuardar.disabled = true;
@@ -5758,8 +6024,6 @@
                 btnGuardar.disabled = false;
             }
         });
-
-        applyClientFilter();
     }
 
     // -------- Vista: Disparos ---------------------------------------------
@@ -8209,6 +8473,11 @@
                     '<span class="tile-title">Explorador S3</span>' +
                     '<span class="tile-desc">Navegá, subí, descargá y eliminá carpetas y archivos del bucket del entorno actual.</span>' +
                 '</button>' +
+                '<button type="button" class="tile-card" id="cfgTileFirmware">' +
+                    '<span class="tile-icon">💾</span>' +
+                    '<span class="tile-title">Firmware</span>' +
+                    '<span class="tile-desc">Subí el último firmware disponible para las alarmas y publicá su hash MD5 al bucket.</span>' +
+                '</button>' +
                 '<button type="button" class="tile-card" id="cfgTileMigrador">' +
                     '<span class="tile-icon">📜</span>' +
                     '<span class="tile-title">Migrador DB</span>' +
@@ -8233,6 +8502,7 @@
             modalExploradorS3Html() +
             confirmDeleteS3Html() +
             ctxMenuS3Html() +
+            modalFirmwareHtml() +
             modalVisorSucesosHtml() +
             modalSucesoDetalleHtml() +
             modalMigradorListaHtml() +
@@ -8251,6 +8521,7 @@
 
         wireConfigView();
         wireExploradorS3View();
+        wireFirmwareView();
         wireVisorSucesosView();
         wireMigradorView();
         wireExploradorDBView();
@@ -9300,6 +9571,278 @@
         var bd = document.getElementById('s3ExpModalBackdrop');
         if (bd && bd.classList.contains('open')) { cerrarExploradorS3(); }
     });
+
+    // -------- Vista: Firmware (Herramientas) ------------------------------
+    //
+    // Herramienta simple para publicar el binario que las alarmas descargan
+    // vía OTA. Guarda dos objetos en el bucket:
+    //   - firmware/firmware.bin  → payload
+    //   - firmware/firmware.txt  → MD5 del payload (mismo nombre base, .txt)
+    // El cálculo del MD5 se hace en el servidor sobre el archivo temporal
+    // (no confiamos en el cliente).
+
+    function modalFirmwareHtml() {
+        return '<div class="modal-backdrop" id="firmwareBackdrop">' +
+            '<div class="modal" style="max-width:760px">' +
+                '<div class="modal-header">' +
+                    '<div class="modal-title" style="display:flex;align-items:center;gap:8px">' +
+                        '<span style="font-size:1.2rem">💾</span>' +
+                        '<span>Firmware</span>' +
+                    '</div>' +
+                    '<button class="btn-icon-sm" type="button" data-act="close" aria-label="Cerrar">&times;</button>' +
+                '</div>' +
+                '<div class="modal-body" style="gap:14px">' +
+                    '<div id="firmwareStatus" class="alert alert-info" style="margin:0">Consultando firmware actual…</div>' +
+
+                    '<div class="table-card" style="padding:14px 16px">' +
+                        '<h3 style="margin:0 0 12px 0;font-size:.95rem">Firmware actual</h3>' +
+                        '<div class="data-list" id="firmwareInfo">' +
+                            '<div class="data-row data-row-full">' +
+                                '<dt class="data-label">Estado</dt>' +
+                                '<dd class="data-value muted">Cargando…</dd>' +
+                            '</div>' +
+                        '</div>' +
+                    '</div>' +
+
+                    '<div class="table-card" style="padding:14px 16px">' +
+                        '<h3 style="margin:0 0 8px 0;font-size:.95rem">Cargar nuevo firmware</h3>' +
+                        '<p style="margin:0 0 12px 0;font-size:.82rem;color:var(--muted);line-height:1.5">' +
+                            'Seleccioná el archivo <code style="font-family:monospace">.bin</code> con el firmware. ' +
+                            'Se guarda como <code style="font-family:monospace">firmware/firmware.bin</code> ' +
+                            'y su hash <code style="font-family:monospace">MD5</code> se publica en ' +
+                            '<code style="font-family:monospace">firmware/firmware.txt</code>. ' +
+                            'Límite: 20 MB.' +
+                        '</p>' +
+                        '<input type="file" id="firmwareFileInput" accept=".bin,application/octet-stream" style="display:none">' +
+                        '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">' +
+                            '<button type="button" class="btn btn-primary" id="firmwareBtnUpload">' +
+                                '<i class="fa-solid fa-upload"></i> Elegir archivo…' +
+                            '</button>' +
+                            '<span id="firmwareUploadHint" style="font-size:.82rem;color:var(--muted)"></span>' +
+                        '</div>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="modal-footer">' +
+                    '<button type="button" class="btn btn-ghost btn-icon" id="firmwareBtnRefrescar" title="Refrescar">' +
+                        '<i class="fa-solid fa-rotate"></i>' +
+                    '</button>' +
+                    '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+                '</div>' +
+            '</div>' +
+        '</div>';
+    }
+
+    function abrirFirmware() {
+        var bd = document.getElementById('firmwareBackdrop');
+        if (!bd) return;
+        bd.classList.add('open');
+        cargarFirmwareInfo();
+    }
+
+    function cerrarFirmware() {
+        var bd = document.getElementById('firmwareBackdrop');
+        if (bd) bd.classList.remove('open');
+    }
+
+    function firmwareFormatBytes(n) {
+        if (n == null || isNaN(n)) return '—';
+        var u = ['B', 'KB', 'MB', 'GB'];
+        var i = 0;
+        while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+        return (i === 0 ? n : n.toFixed(2)) + ' ' + u[i];
+    }
+
+    function firmwareFormatFecha(iso) {
+        if (!iso) return '—';
+        var d = new Date(iso);
+        if (isNaN(d.getTime())) return String(iso);
+        return d.toLocaleString('es-AR');
+    }
+
+    function renderFirmwareInfo(info) {
+        var status = document.getElementById('firmwareStatus');
+        var box    = document.getElementById('firmwareInfo');
+        if (!status || !box) return;
+
+        if (!info || !info.exists) {
+            status.className = 'alert alert-warn';
+            status.style.margin = '0';
+            status.textContent = 'Todavía no hay firmware cargado en el bucket.';
+            box.innerHTML =
+                '<div class="data-row data-row-full">' +
+                    '<dt class="data-label">Estado</dt>' +
+                    '<dd class="data-value muted">Sin firmware</dd>' +
+                '</div>';
+            return;
+        }
+
+        status.className = 'alert alert-success';
+        status.style.margin = '0';
+        status.textContent = 'Firmware disponible para las alarmas.';
+
+        function urlRow(label, url) {
+            return '<div class="data-row data-row-full">' +
+                '<dt class="data-label">' + e(label) + '</dt>' +
+                '<dd class="data-value" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap">' +
+                    '<code style="font-family:monospace;word-break:break-all;flex:1;min-width:0">' +
+                        '<a href="' + e(url) + '" target="_blank" rel="noopener" style="color:var(--info)">' + e(url) + '</a>' +
+                    '</code>' +
+                    '<button type="button" class="btn btn-ghost btn-sm" data-copy-url="' + e(url) + '" title="Copiar URL">' +
+                        '<i class="fa-regular fa-copy"></i> Copiar' +
+                    '</button>' +
+                '</dd>' +
+            '</div>';
+        }
+
+        box.innerHTML =
+            urlRow('URL de descarga', info.url) +
+            '<div class="data-row">' +
+                '<dt class="data-label">Tamaño</dt>' +
+                '<dd class="data-value">' + e(firmwareFormatBytes(info.size)) + '</dd>' +
+            '</div>' +
+            '<div class="data-row">' +
+                '<dt class="data-label">Última carga</dt>' +
+                '<dd class="data-value">' + e(firmwareFormatFecha(info.last_modified)) + '</dd>' +
+            '</div>' +
+            '<div class="data-row data-row-full">' +
+                '<dt class="data-label">MD5</dt>' +
+                '<dd class="data-value"><code style="font-family:monospace;word-break:break-all">' +
+                    (info.md5 ? e(info.md5) : '<span class="muted" style="font-style:italic">— no publicado —</span>') +
+                '</code></dd>' +
+            '</div>' +
+            (info.md5_url ? urlRow('URL del hash', info.md5_url) : '');
+    }
+
+    async function cargarFirmwareInfo() {
+        var status = document.getElementById('firmwareStatus');
+        var box    = document.getElementById('firmwareInfo');
+        if (status) {
+            status.className = 'alert alert-info';
+            status.style.margin = '0';
+            status.textContent = 'Consultando firmware actual…';
+        }
+        if (box) {
+            box.innerHTML =
+                '<div class="data-row data-row-full">' +
+                    '<dt class="data-label">Estado</dt>' +
+                    '<dd class="data-value muted">Cargando…</dd>' +
+                '</div>';
+        }
+        try {
+            var info = await api('/api/herramientas_firmware_info.php');
+            renderFirmwareInfo(info);
+        } catch (err) {
+            if (status) {
+                status.className = 'alert alert-error';
+                status.style.margin = '0';
+                status.textContent = '✗ ' + (err.message || 'Error al consultar el firmware.');
+            }
+            if (box) {
+                box.innerHTML =
+                    '<div class="data-row data-row-full">' +
+                        '<dt class="data-label">Estado</dt>' +
+                        '<dd class="data-value muted">No se pudo consultar el bucket.</dd>' +
+                    '</div>';
+            }
+        }
+    }
+
+    async function subirFirmware(fileList) {
+        if (!fileList || fileList.length === 0) return;
+        var file = fileList[0];
+        if (file.size <= 0) {
+            toast('El firmware está vacío.', true);
+            return;
+        }
+        if (file.size > 20 * 1024 * 1024) {
+            toast('El firmware supera el límite de 20 MB.', true);
+            return;
+        }
+
+        var btn   = document.getElementById('firmwareBtnUpload');
+        var hint  = document.getElementById('firmwareUploadHint');
+        var input = document.getElementById('firmwareFileInput');
+        if (btn) btn.disabled = true;
+        if (hint) hint.textContent = 'Subiendo ' + file.name + ' (' + firmwareFormatBytes(file.size) + ')…';
+        toast('Subiendo firmware…');
+
+        var fd = new FormData();
+        fd.append('archivo', file);
+        try {
+            var res = await api('/api/herramientas_firmware_upload.php', {
+                method: 'POST',
+                body:   fd
+            });
+            toast('Firmware cargado. MD5: ' + (res && res.md5 ? res.md5 : '—'));
+            if (hint) hint.textContent = '';
+            cargarFirmwareInfo();
+        } catch (err) {
+            toast(err.message || 'Error al subir el firmware.', true);
+            if (hint) hint.textContent = '';
+        } finally {
+            if (btn) btn.disabled = false;
+            if (input) input.value = ''; // permitir resubir el mismo archivo
+        }
+    }
+
+    function wireFirmwareView() {
+        var tile = document.getElementById('cfgTileFirmware');
+        if (tile) tile.addEventListener('click', abrirFirmware);
+
+        var bd = document.getElementById('firmwareBackdrop');
+        if (bd) {
+            bd.addEventListener('click', function (ev) {
+                if (ev.target === bd || ev.target.closest('[data-act="close"]')) cerrarFirmware();
+            });
+        }
+
+        var btnRef = document.getElementById('firmwareBtnRefrescar');
+        if (btnRef) btnRef.addEventListener('click', cargarFirmwareInfo);
+
+        var infoBox = document.getElementById('firmwareInfo');
+        if (infoBox) {
+            infoBox.addEventListener('click', function (ev) {
+                var btn = ev.target.closest('[data-copy-url]');
+                if (!btn) return;
+                ev.preventDefault();
+                var url = btn.getAttribute('data-copy-url') || '';
+                if (!url) return;
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(url).then(
+                        function () { toast('URL copiada al portapapeles.'); },
+                        function () { toast('No se pudo copiar la URL.', true); }
+                    );
+                } else {
+                    // Fallback para contextos sin Clipboard API (http local, etc.)
+                    var ta = document.createElement('textarea');
+                    ta.value = url;
+                    ta.style.position = 'fixed';
+                    ta.style.left = '-9999px';
+                    document.body.appendChild(ta);
+                    ta.select();
+                    try { document.execCommand('copy'); toast('URL copiada al portapapeles.'); }
+                    catch (err) { toast('No se pudo copiar la URL.', true); }
+                    document.body.removeChild(ta);
+                }
+            });
+        }
+
+        var btnUp = document.getElementById('firmwareBtnUpload');
+        var input = document.getElementById('firmwareFileInput');
+        if (btnUp && input) {
+            btnUp.addEventListener('click', function () { input.click(); });
+            input.addEventListener('change', function () { subirFirmware(input.files); });
+        }
+
+        if (!wireFirmwareView._escBound) {
+            wireFirmwareView._escBound = true;
+            document.addEventListener('keydown', function (ev) {
+                if (ev.key !== 'Escape') return;
+                var b = document.getElementById('firmwareBackdrop');
+                if (b && b.classList.contains('open')) cerrarFirmware();
+            });
+        }
+    }
 
     // -------- Vista: Visor de sucesos (Herramientas) ----------------------
 
@@ -12197,6 +12740,26 @@
             }
         });
     }
+
+    // -------- Polling de versión ------------------------------------------
+    // Compara la versión con la que se cargó la página (window.__VIGICOM__.version)
+    // contra la versión actual del servidor (api/version.php lee cloud/version.txt).
+    // Si difieren tras un deploy, muestra el banner azul "hay una nueva versión".
+    var VERSION_INICIAL = String((window.__VIGICOM__ || {}).version || '').trim();
+    async function chequearVersion() {
+        try {
+            var r = await fetch('/api/version.php', { cache: 'no-store', credentials: 'same-origin' });
+            var data = await r.json();
+            var actual = data && data.ok && data.data && data.data.version
+                ? String(data.data.version).trim()
+                : '';
+            if (actual && VERSION_INICIAL && actual !== VERSION_INICIAL) {
+                var b = document.getElementById('versionBanner');
+                if (b) b.style.display = '';
+            }
+        } catch (_) { /* silencioso: reintento en el próximo tick */ }
+    }
+    setInterval(chequearVersion, 5000);
 
     window.addEventListener('hashchange', navigate);
     if (!location.hash) {

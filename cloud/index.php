@@ -25,6 +25,10 @@ $cssBust = $version === '0.0.dev' ? (string) time() : $version;
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 </head>
 <body>
+<div id="versionBanner" class="version-banner" style="display:none">
+    Hay una nueva versión disponible.
+    <button type="button" onclick="location.reload()">Actualizar ahora</button>
+</div>
 <div class="sidebar-overlay" id="sidebarOverlay"></div>
 <div class="layout">
     <aside class="sidebar" id="sidebar">

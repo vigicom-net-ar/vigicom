@@ -9,6 +9,8 @@
  *   estado      coincidencia exacta (1 char)
  *   prioridad   coincidencia exacta (1 char)
  *   sentido     coincidencia exacta (1 char)
+ *   propagacion coincidencia exacta (12 chars max) — para filtrar por
+ *               `identidad` de alarma (se guarda en `senales.propagacion`)
  *   procesada   '' | 'si' | 'no'
  *   desde       YYYY-MM-DD (fecha >=)
  *   hasta       YYYY-MM-DD (fecha <= 23:59:59)
@@ -73,6 +75,12 @@ function senales_listar(PDO $pdo, array $opts = []): array
             $where[] = "s.$f = :$f";
             $params[":$f"] = mb_substr($v, 0, 1);
         }
+    }
+
+    $propagacion = trim((string) ($opts['propagacion'] ?? ''));
+    if ($propagacion !== '') {
+        $where[] = 's.propagacion = :propagacion';
+        $params[':propagacion'] = mb_substr($propagacion, 0, 12);
     }
 
     $procesada = (string) ($opts['procesada'] ?? '');

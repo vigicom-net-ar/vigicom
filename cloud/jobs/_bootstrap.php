@@ -36,6 +36,11 @@ require_once dirname(__DIR__, 2) . '/env.php';
 require_once dirname(__DIR__) . '/api/config/db.php';
 require_once dirname(__DIR__) . '/lib/sucesos.php';
 
+// Warnings/errors PHP no atrapados van al visor de sucesos. Los fatales NO
+// se enganchan acá: el shutdown handler de más abajo ya cierra la ejecución
+// y registra el suceso con origen `cron/<job>` (semánticamente correcto).
+instalarCapturadorDeErrores(false);
+
 $__ejecucionId = (int) (getenv('EJECUCION_ID') ?: 0);
 $__cerrada     = false;
 

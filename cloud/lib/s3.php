@@ -295,6 +295,55 @@ function s3_list_all(string $prefix): array
     return $keys;
 }
 
+/**
+ * URL directa al endpoint S3 (path-style o virtual-hosted), evitando la
+ * suposición de que el bucket tiene un CNAME propio. Pensada para casos donde
+ * necesitamos la URL "cruda" que sirve S3 (ej: firmware que las alarmas
+ * descargan por OTA y que no puede depender de resolución DNS custom).
+ *
+ * Ejemplo con bucket path-style "media.vigicom.net.ar":
+ *   https://s3.us-east-1.amazonaws.com/media.vigicom.net.ar/firmware/firmware.bin
+ */
+function s3_endpoint_url(string $key): string
+{
+    $c        = s3_config();
+    $segments = array_map('rawurlencode', explode('/', ltrim($key, '/')));
+    $path     = implode('/', $segments);
+    if ($c['path_style']) {
+        return $c['endpoint'] . '/' . $c['bucket'] . '/' . $path;
+    }
+    return $c['endpoint'] . '/' . $path;
+}
+
+/**
+ * Descarga un objeto por su key. Devuelve null si el objeto no existe (404),
+ * o un array con el cuerpo + metadatos si existe.
+ *
+ * Pensado para archivos chicos (config, hashes, textos). Para blobs grandes
+ * conviene servirlos vía la URL pública.
+ *
+ * @return array{body:string, content_type:string, last_modified:string, size:int}|null
+ */
+function s3_get_object(string $key): ?array
+{
+    $c        = s3_config();
+    $key      = ltrim($key, '/');
+    $segments = array_map('rawurlencode', explode('/', $key));
+    $keyPath  = implode('/', $segments);
+    $uri      = $c['path_style'] ? ('/' . $c['bucket'] . '/' . $keyPath) : ('/' . $keyPath);
+
+    $resp = s3_request('GET', $uri);
+    if ($resp['status'] === 404) return null;
+    s3_throw_on_error($resp, 'get');
+
+    return [
+        'body'          => $resp['body'],
+        'content_type'  => $resp['headers']['content-type']  ?? '',
+        'last_modified' => $resp['headers']['last-modified'] ?? '',
+        'size'          => (int) ($resp['headers']['content-length'] ?? strlen($resp['body'])),
+    ];
+}
+
 function s3_put_object(string $key, string $body, string $contentType = 'application/octet-stream'): void
 {
     $c        = s3_config();

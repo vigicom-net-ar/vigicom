@@ -402,6 +402,45 @@ tbody tr:hover { background: var(--row-hover); }
     .data-list { grid-template-columns: 1fr; }
 }
 
+.ala-tabs      { display: flex; gap: 4px; border-bottom: 1px solid var(--border);
+                 margin: 0 0 12px; }
+.ala-tab       { background: none; border: none; cursor: pointer;
+                 font-family: inherit; font-size: .85rem; font-weight: 600;
+                 color: var(--muted); padding: 10px 14px;
+                 border-bottom: 2px solid transparent; margin-bottom: -1px;
+                 transition: color .15s, border-color .15s; }
+.ala-tab:hover { color: var(--text); }
+.ala-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+.ala-tabpanel[hidden] { display: none; }
+
+#alaSenalesBody .table-card,
+#alaControlesSenales .table-card { max-height: 60vh; overflow-y: auto; }
+#alaSenalesBody thead th,
+#alaControlesSenales thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
+
+.ala-cmd-btn { position: relative;
+               width: 50px; height: 50px; padding: 0;
+               display: inline-flex; align-items: center; justify-content: center;
+               background: var(--primary); color: #fff;
+               border: none; border-radius: 8px; cursor: pointer;
+               transition: filter .15s; }
+.ala-cmd-btn:hover  { filter: brightness(1.1); }
+.ala-cmd-btn:active { filter: brightness(.9); }
+.ala-cmd-btn i      { font-size: 1.35rem; line-height: 1; }
+.ala-cmd-btn[data-tooltip]::after {
+    content: attr(data-tooltip);
+    position: absolute; bottom: calc(100% + 6px); left: 50%;
+    transform: translateX(-50%);
+    background: #1f2937; color: #fff;
+    font-size: .72rem; font-weight: 600; white-space: nowrap;
+    padding: 4px 8px; border-radius: 6px;
+    pointer-events: none; opacity: 0; visibility: hidden;
+    box-shadow: 0 4px 12px rgba(0,0,0,.25);
+    z-index: 10;
+}
+.ala-cmd-btn[data-tooltip]:hover::after,
+.ala-cmd-btn[data-tooltip]:focus-visible::after { opacity: 1; visibility: visible; }
+
 /* ===== 23. JSON editor ===== */
 .json-editor {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -827,3 +866,16 @@ tbody tr:hover { background: var(--row-hover); }
 .mt-1          { margin-top: 4px; }
 .mt-2          { margin-top: 8px; }
 .mt-4          { margin-top: 16px; }
+
+/* ===== 25. Banner "nueva versión disponible" ===== */
+.version-banner        { position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
+                         background: #1e40af; color: #fff;
+                         padding: 10px 20px;
+                         display: flex; align-items: center; justify-content: center; gap: 16px;
+                         font-size: .9rem; font-weight: 500;
+                         box-shadow: 0 2px 8px rgba(0,0,0,.35); }
+.version-banner button { background: #fff; color: #1e40af;
+                         border: none; border-radius: 6px;
+                         padding: 5px 14px; font-size: .85rem; font-weight: 600;
+                         cursor: pointer; }
+.version-banner button:hover { background: #e0e7ff; }

@@ -30,6 +30,7 @@ try {
                 'alarmas'                 => alarmas_listar($pdo, $_GET),
                 'kpis'                    => alarmas_kpis($pdo),
                 'comunidades'             => $pdo->query('SELECT id, nombre FROM comunidades ORDER BY nombre')->fetchAll(),
+                'estados_opciones'        => alarmas_estados_opciones($pdo),
                 'online_interval_seconds' => ALARMA_ONLINE_SECONDS,
             ]);
             break;
@@ -41,26 +42,32 @@ try {
             $stmt = $pdo->prepare(
                 'INSERT INTO alarmas
                      (nombre, comunidad, domicilio, ciudad, identidad,
-                      tipo, hardware, firmware, revision,
+                      tipo, comunicacion, prioridad, altura, titularidad,
+                      hardware, firmware, revision,
                       latitud, longitud, estado, instalacion)
                  VALUES
                      (:nombre, :comunidad, :domicilio, :ciudad, :identidad,
-                      :tipo, :hardware, :firmware, :revision,
+                      :tipo, :comunicacion, :prioridad, :altura, :titularidad,
+                      :hardware, :firmware, :revision,
                       :latitud, :longitud, :estado, NOW())'
             );
             $stmt->execute([
-                ':nombre'    => $datos['nombre'],
-                ':comunidad' => $datos['comunidad'],
-                ':domicilio' => $datos['domicilio'],
-                ':ciudad'    => $datos['ciudad'],
-                ':identidad' => $datos['identidad'],
-                ':tipo'      => $datos['tipo'],
-                ':hardware'  => $datos['hardware'],
-                ':firmware'  => $datos['firmware'],
-                ':revision'  => $datos['revision'],
-                ':latitud'   => $datos['latitud'],
-                ':longitud'  => $datos['longitud'],
-                ':estado'    => $datos['estado'],
+                ':nombre'       => $datos['nombre'],
+                ':comunidad'    => $datos['comunidad'],
+                ':domicilio'    => $datos['domicilio'],
+                ':ciudad'       => $datos['ciudad'],
+                ':identidad'    => $datos['identidad'],
+                ':tipo'         => $datos['tipo'],
+                ':comunicacion' => $datos['comunicacion'],
+                ':prioridad'    => $datos['prioridad'],
+                ':altura'       => $datos['altura'],
+                ':titularidad'  => $datos['titularidad'],
+                ':hardware'     => $datos['hardware'],
+                ':firmware'     => $datos['firmware'],
+                ':revision'     => $datos['revision'],
+                ':latitud'      => $datos['latitud'],
+                ':longitud'     => $datos['longitud'],
+                ':estado'       => $datos['estado'],
             ]);
             json_ok(['id' => (int) $pdo->lastInsertId()]);
             break;
@@ -74,34 +81,42 @@ try {
 
             $stmt = $pdo->prepare(
                 'UPDATE alarmas
-                    SET nombre    = :nombre,
-                        comunidad = :comunidad,
-                        domicilio = :domicilio,
-                        ciudad    = :ciudad,
-                        identidad = :identidad,
-                        tipo      = :tipo,
-                        hardware  = :hardware,
-                        firmware  = :firmware,
-                        revision  = :revision,
-                        latitud   = :latitud,
-                        longitud  = :longitud,
-                        estado    = :estado
+                    SET nombre       = :nombre,
+                        comunidad    = :comunidad,
+                        domicilio    = :domicilio,
+                        ciudad       = :ciudad,
+                        identidad    = :identidad,
+                        tipo         = :tipo,
+                        comunicacion = :comunicacion,
+                        prioridad    = :prioridad,
+                        altura       = :altura,
+                        titularidad  = :titularidad,
+                        hardware     = :hardware,
+                        firmware     = :firmware,
+                        revision     = :revision,
+                        latitud      = :latitud,
+                        longitud     = :longitud,
+                        estado       = :estado
                   WHERE id = :id'
             );
             $stmt->execute([
-                ':nombre'    => $datos['nombre'],
-                ':comunidad' => $datos['comunidad'],
-                ':domicilio' => $datos['domicilio'],
-                ':ciudad'    => $datos['ciudad'],
-                ':identidad' => $datos['identidad'],
-                ':tipo'      => $datos['tipo'],
-                ':hardware'  => $datos['hardware'],
-                ':firmware'  => $datos['firmware'],
-                ':revision'  => $datos['revision'],
-                ':latitud'   => $datos['latitud'],
-                ':longitud'  => $datos['longitud'],
-                ':estado'    => $datos['estado'],
-                ':id'        => $id,
+                ':nombre'       => $datos['nombre'],
+                ':comunidad'    => $datos['comunidad'],
+                ':domicilio'    => $datos['domicilio'],
+                ':ciudad'       => $datos['ciudad'],
+                ':identidad'    => $datos['identidad'],
+                ':tipo'         => $datos['tipo'],
+                ':comunicacion' => $datos['comunicacion'],
+                ':prioridad'    => $datos['prioridad'],
+                ':altura'       => $datos['altura'],
+                ':titularidad'  => $datos['titularidad'],
+                ':hardware'     => $datos['hardware'],
+                ':firmware'     => $datos['firmware'],
+                ':revision'     => $datos['revision'],
+                ':latitud'      => $datos['latitud'],
+                ':longitud'     => $datos['longitud'],
+                ':estado'       => $datos['estado'],
+                ':id'           => $id,
             ]);
             json_ok();
             break;
@@ -134,26 +149,34 @@ function alarma_leer_body(): array
 
 function alarma_validar_payload(array &$datos): void
 {
-    $datos['nombre']    = trim((string) ($datos['nombre']    ?? ''));
-    $datos['domicilio'] = trim((string) ($datos['domicilio'] ?? ''));
-    $datos['ciudad']    = trim((string) ($datos['ciudad']    ?? ''));
-    $datos['identidad'] = trim((string) ($datos['identidad'] ?? ''));
-    $datos['tipo']      = trim((string) ($datos['tipo']      ?? ''));
-    $datos['hardware']  = trim((string) ($datos['hardware']  ?? ''));
-    $datos['firmware']  = trim((string) ($datos['firmware']  ?? ''));
-    $datos['revision']  = trim((string) ($datos['revision']  ?? ''));
-    $datos['latitud']   = trim((string) ($datos['latitud']   ?? ''));
-    $datos['longitud']  = trim((string) ($datos['longitud']  ?? ''));
+    $datos['nombre']       = trim((string) ($datos['nombre']       ?? ''));
+    $datos['domicilio']    = trim((string) ($datos['domicilio']    ?? ''));
+    $datos['ciudad']       = trim((string) ($datos['ciudad']       ?? ''));
+    $datos['identidad']    = trim((string) ($datos['identidad']    ?? ''));
+    $datos['tipo']         = trim((string) ($datos['tipo']         ?? ''));
+    $datos['comunicacion'] = trim((string) ($datos['comunicacion'] ?? ''));
+    $datos['prioridad']    = trim((string) ($datos['prioridad']    ?? ''));
+    $datos['altura']       = trim((string) ($datos['altura']       ?? ''));
+    $datos['titularidad']  = trim((string) ($datos['titularidad']  ?? ''));
+    $datos['hardware']     = trim((string) ($datos['hardware']     ?? ''));
+    $datos['firmware']     = trim((string) ($datos['firmware']     ?? ''));
+    $datos['revision']     = trim((string) ($datos['revision']     ?? ''));
+    $datos['latitud']      = trim((string) ($datos['latitud']      ?? ''));
+    $datos['longitud']     = trim((string) ($datos['longitud']     ?? ''));
 
-    $datos['domicilio'] = $datos['domicilio'] !== '' ? $datos['domicilio'] : null;
-    $datos['ciudad']    = $datos['ciudad']    !== '' ? $datos['ciudad']    : null;
-    $datos['identidad'] = $datos['identidad'] !== '' ? $datos['identidad'] : null;
-    $datos['tipo']      = $datos['tipo']      !== '' ? mb_substr($datos['tipo'], 0, 1) : null;
-    $datos['hardware']  = $datos['hardware']  !== '' ? $datos['hardware']  : null;
-    $datos['firmware']  = $datos['firmware']  !== '' ? $datos['firmware']  : null;
-    $datos['revision']  = $datos['revision']  !== '' ? $datos['revision']  : null;
-    $datos['latitud']   = $datos['latitud']   !== '' ? $datos['latitud']   : null;
-    $datos['longitud']  = $datos['longitud']  !== '' ? $datos['longitud']  : null;
+    $datos['domicilio']    = $datos['domicilio']    !== '' ? $datos['domicilio'] : null;
+    $datos['ciudad']       = $datos['ciudad']       !== '' ? $datos['ciudad']    : null;
+    $datos['identidad']    = $datos['identidad']    !== '' ? $datos['identidad'] : null;
+    $datos['tipo']         = $datos['tipo']         !== '' ? mb_substr($datos['tipo'],         0, 1) : null;
+    $datos['comunicacion'] = $datos['comunicacion'] !== '' ? mb_substr($datos['comunicacion'], 0, 1) : null;
+    $datos['prioridad']    = $datos['prioridad']    !== '' ? mb_substr($datos['prioridad'],    0, 1) : null;
+    $datos['altura']       = $datos['altura']       !== '' ? mb_substr($datos['altura'],       0, 1) : null;
+    $datos['titularidad']  = $datos['titularidad']  !== '' ? mb_substr($datos['titularidad'],  0, 1) : null;
+    $datos['hardware']     = $datos['hardware']     !== '' ? $datos['hardware']  : null;
+    $datos['firmware']     = $datos['firmware']     !== '' ? $datos['firmware']  : null;
+    $datos['revision']     = $datos['revision']     !== '' ? $datos['revision']  : null;
+    $datos['latitud']      = $datos['latitud']      !== '' ? $datos['latitud']   : null;
+    $datos['longitud']     = $datos['longitud']     !== '' ? $datos['longitud']  : null;
 
     $datos['comunidad'] = isset($datos['comunidad']) && ctype_digit((string) $datos['comunidad'])
         ? (int) $datos['comunidad'] : null;
@@ -179,9 +202,12 @@ function alarma_validar_payload(array &$datos): void
 function alarma_get(PDO $pdo, int $id): array
 {
     // Devuelve todos los campos del registro, con nombres resueltos para
-    // comunidad, equipo y ciudad (referenciada solo como string libre).
+    // comunidad y equipo, y los textos correspondientes de la tabla
+    // `estados` para los campos tipo/comunicacion/revision/prioridad/altura/
+    // titularidad/estado (ver legacy: consultar.php de alarmas usaba
+    // `comboTraducir` contra la tabla `combos`).
     $stmt = $pdo->prepare(
-        'SELECT a.id, a.nombre, a.equipo, a.tipo, a.generacion,
+        "SELECT a.id, a.nombre, a.equipo, a.tipo, a.generacion,
                 a.hardware, a.firmware, a.revision,
                 a.prioridad, a.altura, a.comunicacion, a.propagacion, a.identidad,
                 a.comunidad, a.domicilio, a.ciudad, a.foto, a.latitud, a.longitud,
@@ -191,12 +217,26 @@ function alarma_get(PDO $pdo, int $id): array
                 a.senal, a.reconexiones, a.salud, a.envio, a.parametros,
                 c.nombre AS comunidad_nombre,
                 e.nombre AS equipo_nombre,
-                e.uuid   AS equipo_uuid
+                e.uuid   AS equipo_uuid,
+                et.texto   AS tipo_texto,
+                eco.texto  AS comunicacion_texto,
+                er.texto   AS revision_texto,
+                ep.texto   AS prioridad_texto,
+                eal.texto  AS altura_texto,
+                eti.texto  AS titularidad_texto,
+                ees.texto  AS estado_texto
            FROM alarmas a
-           LEFT JOIN comunidades c ON c.id = a.comunidad
-           LEFT JOIN equipos     e ON e.id = a.equipo
+           LEFT JOIN comunidades c   ON c.id     = a.comunidad
+           LEFT JOIN equipos     e   ON e.id     = a.equipo
+           LEFT JOIN estados     et  ON et.campo  = 'alarma.tipo'         AND et.valor  = a.tipo
+           LEFT JOIN estados     eco ON eco.campo = 'alarma.comunicacion' AND eco.valor = a.comunicacion
+           LEFT JOIN estados     er  ON er.campo  = 'alarma.revision'     AND er.valor  = a.revision
+           LEFT JOIN estados     ep  ON ep.campo  = 'alarma.prioridad'    AND ep.valor  = a.prioridad
+           LEFT JOIN estados     eal ON eal.campo = 'alarma.altura'       AND eal.valor = a.altura
+           LEFT JOIN estados     eti ON eti.campo = 'alarma.titularidad'  AND eti.valor = a.titularidad
+           LEFT JOIN estados     ees ON ees.campo = 'alarma.estado'       AND ees.valor = a.estado
           WHERE a.id = :id
-          LIMIT 1'
+          LIMIT 1"
     );
     $stmt->execute([':id' => $id]);
     $a = $stmt->fetch();
@@ -204,6 +244,33 @@ function alarma_get(PDO $pdo, int $id): array
         json_error('Alarma no encontrada.', 404);
     }
     return $a;
+}
+
+function alarmas_estados_opciones(PDO $pdo): array
+{
+    // Opciones de la tabla `estados` para los 7 campos que la UI de
+    // consultar/editar alarma resuelve contra ese catalogo.
+    $campos = [
+        'alarma.tipo', 'alarma.comunicacion', 'alarma.revision',
+        'alarma.prioridad', 'alarma.altura', 'alarma.titularidad',
+        'alarma.estado',
+    ];
+    $ph   = implode(',', array_fill(0, count($campos), '?'));
+    $stmt = $pdo->prepare(
+        "SELECT campo, valor, texto
+           FROM estados
+          WHERE campo IN ($ph)
+          ORDER BY campo, orden, valor"
+    );
+    $stmt->execute($campos);
+    $out = array_fill_keys($campos, []);
+    foreach ($stmt->fetchAll() as $row) {
+        $out[$row['campo']][] = [
+            'valor' => $row['valor'],
+            'texto' => $row['texto'],
+        ];
+    }
+    return $out;
 }
 
 function alarmas_listar(PDO $pdo, array $opts = []): array
@@ -235,6 +302,11 @@ function alarmas_listar(PDO $pdo, array $opts = []): array
     if ($nombre !== '') {
         $where[] = 'a.nombre LIKE :nombre';
         $params[':nombre'] = '%' . $nombre . '%';
+    }
+    $q = trim((string) ($opts['q'] ?? ''));
+    if ($q !== '') {
+        $where[] = '(a.nombre LIKE :q OR a.identidad LIKE :q OR a.domicilio LIKE :q OR a.ciudad LIKE :q OR c.nombre LIKE :q)';
+        $params[':q'] = '%' . $q . '%';
     }
     if (!empty($opts['comunidad']) && ctype_digit((string) $opts['comunidad'])) {
         $where[] = 'a.comunidad = :comunidad';

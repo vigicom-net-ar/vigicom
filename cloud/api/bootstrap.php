@@ -14,11 +14,11 @@
 require_once dirname(__DIR__, 2) . '/env.php';
 require_once __DIR__ . '/config/db.php';
 require_once dirname(__DIR__) . '/lib/auth_check.php';
+require_once dirname(__DIR__) . '/lib/sucesos.php';
 
-if (APP_ENV !== 'production') {
-    ini_set('display_errors', '1');
-    error_reporting(E_ALL);
-} else {
-    ini_set('display_errors', '0');
-    error_reporting(0);
-}
+// error_reporting queda siempre en E_ALL para que el capturador reciba
+// todos los eventos; el display_errors se apaga en producción.
+error_reporting(E_ALL);
+ini_set('display_errors', APP_ENV !== 'production' ? '1' : '0');
+
+instalarCapturadorDeErrores();
