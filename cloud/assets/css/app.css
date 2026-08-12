@@ -413,10 +413,39 @@ tbody tr:hover { background: var(--row-hover); }
 .ala-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
 .ala-tabpanel[hidden] { display: none; }
 
-#alaSenalesBody .table-card,
-#alaControlesSenales .table-card { max-height: 60vh; overflow-y: auto; }
 #alaSenalesBody thead th,
 #alaControlesSenales thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
+
+/* Modal "Consultar alarma": altura fija, footer siempre visible,
+   scroll interno acotado a cada pestaña (y a la tabla en Señales). */
+.modal.ala-consultar-modal {
+    height: calc(100vh - 64px);
+    max-height: calc(100vh - 64px);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+}
+.ala-consultar-modal .modal-body {
+    flex: 1; min-height: 0; overflow: hidden;
+}
+.ala-consultar-modal .ala-tabpanel:not([hidden]) {
+    flex: 1; min-height: 0;
+    display: flex; flex-direction: column;
+}
+.ala-consultar-modal #alaTabGeneral,
+.ala-consultar-modal #alaTabDetalles,
+.ala-consultar-modal #alaTabControles { overflow-y: auto; }
+.ala-consultar-modal #alaTabSenales #alaSenalesBody {
+    flex: 1; min-height: 0;
+    display: flex; flex-direction: column;
+}
+.ala-consultar-modal #alaSenalesBody .table-card {
+    flex: 1; min-height: 0;
+    max-height: none;
+    overflow-y: auto;
+}
+.ala-consultar-modal #alaControlesSenales .table-card {
+    max-height: 60vh; overflow-y: auto;
+}
 
 .ala-cmd-btn { position: relative;
                width: 50px; height: 50px; padding: 0;

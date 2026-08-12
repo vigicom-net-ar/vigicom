@@ -305,8 +305,15 @@ function alarmas_listar(PDO $pdo, array $opts = []): array
     }
     $q = trim((string) ($opts['q'] ?? ''));
     if ($q !== '') {
-        $where[] = '(a.nombre LIKE :q OR a.identidad LIKE :q OR a.domicilio LIKE :q OR a.ciudad LIKE :q OR c.nombre LIKE :q)';
-        $params[':q'] = '%' . $q . '%';
+        // Placeholders distintos por columna: con PDO::ATTR_EMULATE_PREPARES=false
+        // MySQL no permite reutilizar el mismo :q en múltiples posiciones.
+        $where[] = '(a.nombre LIKE :q1 OR a.identidad LIKE :q2 OR a.domicilio LIKE :q3 OR a.ciudad LIKE :q4 OR c.nombre LIKE :q5)';
+        $like = '%' . $q . '%';
+        $params[':q1'] = $like;
+        $params[':q2'] = $like;
+        $params[':q3'] = $like;
+        $params[':q4'] = $like;
+        $params[':q5'] = $like;
     }
     if (!empty($opts['comunidad']) && ctype_digit((string) $opts['comunidad'])) {
         $where[] = 'a.comunidad = :comunidad';

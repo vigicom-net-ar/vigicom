@@ -5351,7 +5351,7 @@
     }
 
     function modalConsultarAlarmaHtml() {
-        return '<div class="modal-backdrop" id="alaConsultar"><div class="modal modal-xl">' +
+        return '<div class="modal-backdrop" id="alaConsultar"><div class="modal modal-xl ala-consultar-modal">' +
             '<div class="modal-header">' +
                 '<div class="modal-title">' +
                     '<span>Consultar alarma</span>' +
@@ -5445,6 +5445,7 @@
         var senalesTabState   = { current: null }; // id cargado en la pestaña Señales
         var controlesTabState = { current: null }; // id cargado en la pestaña Controles
         var controlesPollTimer = null;
+        var senalesPollTimer   = null;
 
         function detenerPollControles() {
             if (controlesPollTimer) {
@@ -5462,6 +5463,22 @@
                 cargarSenalesEn(id, consultarControles, 10, controlesTabState, true);
             }, 1000);
         }
+        function detenerPollSenales() {
+            if (senalesPollTimer) {
+                clearInterval(senalesPollTimer);
+                senalesPollTimer = null;
+            }
+        }
+        function iniciarPollSenales(id) {
+            detenerPollSenales();
+            senalesPollTimer = setInterval(function () {
+                if (consultarIdActual !== id || !consultarModal.classList.contains('open')) {
+                    detenerPollSenales();
+                    return;
+                }
+                cargarSenalesEn(id, consultarSenales, 10, senalesTabState, true);
+            }, 1000);
+        }
 
         function alaCambiarTab(tab) {
             consultarTabs.querySelectorAll('.ala-tab').forEach(function (t) {
@@ -5476,8 +5493,11 @@
             else if (tab === 'senales')   consultarPSen.removeAttribute('hidden');
             else                           consultarPGen.removeAttribute('hidden');
 
-            if (tab === 'senales' && senalesTabState.current !== consultarIdActual) {
-                cargarSenalesEn(consultarIdActual, consultarSenales, 50, senalesTabState);
+            if (tab === 'senales') {
+                if (senalesTabState.current !== consultarIdActual) {
+                    cargarSenalesEn(consultarIdActual, consultarSenales, 10, senalesTabState);
+                }
+                iniciarPollSenales(consultarIdActual);
             } else if (tab === 'controles') {
                 if (controlesTabState.current !== consultarIdActual) {
                     cargarSenalesEn(consultarIdActual, consultarControles, 10, controlesTabState);
@@ -5486,6 +5506,7 @@
             }
 
             if (tab !== 'controles') detenerPollControles();
+            if (tab !== 'senales')   detenerPollSenales();
         }
         consultarTabs.addEventListener('click', function (ev) {
             var btn = ev.target.closest('.ala-tab');
@@ -5583,6 +5604,8 @@
                         '<th style="text-align:center;">Estado</th>' +
                     '</tr></thead><tbody>' + filas + '</tbody></table>' +
                 '</div>';
+            var newCard = target.querySelector('.table-card');
+            if (newCard) newCard.scrollTop = 0;
             } finally {
                 state.inflight = false;
             }
@@ -5775,12 +5798,14 @@
             if (ev.target === consultarModal || ev.target.closest('[data-act="close"]')) {
                 consultarModal.classList.remove('open');
                 detenerPollControles();
+                detenerPollSenales();
             }
         });
         consultarEditar.addEventListener('click', function () {
             if (consultarIdActual == null) return;
             consultarModal.classList.remove('open');
             detenerPollControles();
+            detenerPollSenales();
             abrirEdicion(consultarIdActual);
         });
 
