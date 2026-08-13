@@ -6,6 +6,9 @@
 # Config local de VSCode / SFTP
 .vscode/sftp.json
 
+# Dependencias PHP instaladas por composer
+cloud/vendor/
+
 # Sistema
 .DS_Store
 Thumbs.db

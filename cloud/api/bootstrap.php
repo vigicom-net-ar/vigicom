@@ -16,6 +16,16 @@ require_once __DIR__ . '/config/db.php';
 require_once dirname(__DIR__) . '/lib/auth_check.php';
 require_once dirname(__DIR__) . '/lib/sucesos.php';
 
+// Autoload de dependencias PHP declaradas en cloud/composer.json. El vendor/
+// lo instala el entrypoint del contenedor la primera vez. Si no existe todavía
+// (por ejemplo primer arranque antes de que composer install termine), no se
+// carga y los endpoints que dependan de librerías composer fallarán con
+// un mensaje claro cuando intenten usarlas.
+$vendorAutoload = dirname(__DIR__) . '/vendor/autoload.php';
+if (is_file($vendorAutoload)) {
+    require_once $vendorAutoload;
+}
+
 // error_reporting queda siempre en E_ALL para que el capturador reciba
 // todos los eventos; el display_errors se apaga en producción.
 error_reporting(E_ALL);

@@ -82,6 +82,9 @@ $cssBust = $version === '0.0.dev' ? (string) time() : $version;
                     <a class="nav-item nav-sub-item" href="#/equipos" data-route="/equipos">
                         <span class="nav-icon">🛰️</span><span>Equipos</span>
                     </a>
+                    <a class="nav-item nav-sub-item" href="#/transceptores" data-route="/transceptores">
+                        <span class="nav-icon">📡</span><span>Transceptores</span>
+                    </a>
                 </div>
             </div>
 

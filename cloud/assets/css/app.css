@@ -629,6 +629,10 @@ tbody tr:hover { background: var(--row-hover); }
                    text-overflow: ellipsis; min-width: 0; }
 .log-pending     { color: #fbbf24; font-weight: 600; }
 .log-processed   { color: #6b7280; }
+.log-line-meta   { opacity: .85; font-style: italic; }
+.log-line-meta .log-arrow { color: #93c5fd; }
+.log-line.log-error .log-arrow { color: #f87171; }
+.log-line.log-error .log-msg   { color: #fca5a5; }
 
 .signals-monitor-footer-info {
     margin-right: auto;

@@ -33,6 +33,7 @@
         '/casas':        { title: 'Casas',         render: renderCasas },
         '/alarmas':      { title: 'Alarmas',       render: renderAlarmas },
         '/equipos':      { title: 'Equipos',       render: renderEquipos },
+        '/transceptores':{ title: 'Transceptores', render: renderTransceptores },
         '/dispositivos': { title: 'Dispositivos',  render: renderTodo },
         '/disparos':     { title: 'Disparos',      render: renderDisparos },
         '/eventos':      { title: 'Eventos',       render: renderTodo },
@@ -3880,7 +3881,7 @@
 
     // -------- Vista: Comunidades ------------------------------------------
 
-    var comunidadesFiltros = {
+    var comunidadesFiltrosDefault = {
         sort:      'id',
         dir:       'desc',
         limit:     100,
@@ -3888,6 +3889,9 @@
         nombre:    '',
         estado:    ''
     };
+    var comunidadesFiltros         = Object.assign({}, comunidadesFiltrosDefault);
+    var comunidadesFiltrosSnapshot = null;
+    var comunidadesRegistroCache   = {};
 
     function comunidadesQueryString() {
         var qs = [];
@@ -3900,62 +3904,94 @@
         return qs.length ? ('?' + qs.join('&')) : '';
     }
 
+    function comunidadesFiltrosActivos() {
+        var n = 0;
+        Object.keys(comunidadesFiltrosDefault).forEach(function (k) {
+            if (k === 'sort' || k === 'dir' || k === 'limit') return;
+            if (String(comunidadesFiltros[k]) !== String(comunidadesFiltrosDefault[k])) n++;
+        });
+        return n;
+    }
+
+    function comunidadesCountText(n) {
+        return 'Mostrando ' + n + ' resultado(s) (límite ' + comunidadesFiltros.limit + ').';
+    }
+
+    function moduleHelpComunidadesHtml() {
+        return '<div class="module-help" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin-bottom:16px;box-shadow:var(--shadow);display:flex;gap:14px;align-items:center;">' +
+            '<div style="font-size:1.6rem;line-height:1;">🏘️</div>' +
+            '<div style="font-size:.88rem;color:var(--muted);line-height:1.45;">' +
+                'Las comunidades son los barrios cerrados y consorcios administrados por la plataforma, con sus datos de ubicación, teléfonos de emergencia, estado operativo y las casas y alarmas que agrupan.' +
+            '</div>' +
+        '</div>';
+    }
+
+    function renderComunidadesStats(kpis) {
+        return statCard('Total',     kpis.total     || 0, 'orange', 'Comunidades registradas') +
+               statCard('Activas',   kpis.activas   || 0, 'green',  'Operativas') +
+               statCard('Inactivas', kpis.inactivas || 0, 'red',    'Sin operación');
+    }
+
+    async function recargarComunidadesLista() {
+        try {
+            var data        = await api('/api/comunidades.php' + comunidadesQueryString());
+            var comunidades = data.comunidades || [];
+            var kpis        = data.kpis        || {};
+            comunidadesRegistroCache = {};
+            var stats = document.getElementById('comStats');
+            var tbody = document.getElementById('comTbody');
+            var count = document.getElementById('comCount');
+            if (stats) stats.innerHTML = renderComunidadesStats(kpis);
+            if (tbody) tbody.innerHTML = renderFilasComunidades(comunidades);
+            if (count) count.textContent = comunidadesCountText(comunidades.length);
+            var btn = document.getElementById('comFiltros');
+            if (btn) {
+                var n = comunidadesFiltrosActivos();
+                var badge = btn.querySelector('.btn-icon-badge');
+                btn.classList.toggle('active', n > 0);
+                if (badge) {
+                    badge.textContent = n || '';
+                    badge.style.display = n ? '' : 'none';
+                }
+            }
+            var searchInput = document.getElementById('comSearch');
+            if (searchInput) searchInput.dispatchEvent(new Event('input'));
+        } catch (err) {
+            toast(err.message, true);
+        }
+    }
+
     async function renderComunidades(view) {
         var data        = await api('/api/comunidades.php' + comunidadesQueryString());
         var comunidades = data.comunidades || [];
         var kpis        = data.kpis        || {};
-
-        var filtrosActivos = (comunidadesFiltros.filtro_id !== '' ? 1 : 0) +
-                             (comunidadesFiltros.nombre    !== '' ? 1 : 0) +
-                             (comunidadesFiltros.estado    !== '' ? 1 : 0);
-        var badgeFiltros = filtrosActivos
-            ? ' <span class="badge badge-info" style="margin-left:6px;">' + filtrosActivos + '</span>'
-            : '';
+        comunidadesRegistroCache = {};
 
         view.innerHTML =
-            '<div class="page-header"><div>' +
-                '<h1>Comunidades</h1>' +
-                '<p>Barrios y comunidades cerradas administradas por la plataforma.</p>' +
-            '</div></div>' +
+            moduleHelpComunidadesHtml() +
 
-            '<div class="stats-bar">' +
-                statCard('Total',     kpis.total     || 0, 'orange', 'Comunidades registradas') +
-                statCard('Activas',   kpis.activas   || 0, 'green',  'Operativas') +
-                statCard('Inactivas', kpis.inactivas || 0, 'red',    'Sin operación') +
-            '</div>' +
+            '<div class="stats-bar" id="comStats">' + renderComunidadesStats(kpis) + '</div>' +
 
-            '<div class="toolbar">' +
-                '<div class="toolbar-left">' +
-                    '<div class="search-wrap">' +
-                        '<input type="search" id="comSearch" class="search-input" placeholder="Buscar nombre o domicilio...">' +
-                        '<button class="search-clear" id="comSearchClear" type="button" style="display:none;">&times;</button>' +
-                    '</div>' +
-                    '<button class="btn btn-secondary" id="comFiltros" type="button">' +
-                        '<i class="fa-solid fa-filter"></i> Filtros' + badgeFiltros +
-                    '</button>' +
-                '</div>' +
-                '<div class="toolbar-right">' +
-                    '<button class="btn btn-primary" id="comNuevo" type="button">+ Nueva comunidad</button>' +
-                '</div>' +
-            '</div>' +
+            toolbarSeguridadHtml('com', '🔍 Buscar nombre o domicilio…', '+ Nueva comunidad', comunidadesFiltrosActivos()) +
 
             '<div class="table-card">' +
                 '<table><thead><tr>' +
                     '<th>Código</th><th>Nombre</th><th>Domicilio</th><th>Casas</th><th>Estado</th>' +
-                    '<th style="text-align:right;">Acciones</th>' +
+                    '<th style="text-align:center;">Acciones</th>' +
                 '</tr></thead><tbody id="comTbody">' +
                 renderFilasComunidades(comunidades) +
                 '</tbody></table>' +
                 '<div class="table-empty" id="comEmpty" style="display:none;">No hay comunidades que coincidan con la búsqueda.</div>' +
             '</div>' +
-            '<div class="text-muted text-sm" style="margin-top:10px;">' +
-                'Mostrando ' + comunidades.length + ' resultado(s) (límite ' + comunidadesFiltros.limit + ').' +
+            '<div class="text-muted text-sm" id="comCount" style="margin-top:10px;">' +
+                comunidadesCountText(comunidades.length) +
             '</div>' +
 
             modalComunidadHtml() +
-            modalFiltrosComunidadesHtml() +
             modalConsultarComunidadHtml() +
-            confirmDeleteComunidadHtml();
+            modalFiltrosComunidadesHtml() +
+            confirmDeleteComunidadHtml() +
+            ctxMenuAbmHtml('comCtxMenu');
 
         wireComunidadesView();
     }
@@ -3967,7 +4003,7 @@
         return comunidades.map(function (c) {
             var activa = parseInt(c.estado, 10) === 1;
             var busq   = String((c.nombre || '') + ' ' + (c.domicilio || '')).toLowerCase().trim();
-            return '<tr data-id="' + c.id + '" data-search="' + e(busq) + '">' +
+            return '<tr data-id="' + c.id + '" data-search="' + e(busq) + '" style="cursor:pointer;">' +
                 '<td class="td-id">#' + c.id + '</td>' +
                 '<td><div class="td-nombre">' + e(c.nombre || '—') + '</div></td>' +
                 '<td>' + e(c.domicilio || '—') + '</td>' +
@@ -3977,11 +4013,11 @@
                         ? '<span class="badge badge-success">Activa</span>'
                         : '<span class="badge badge-danger">Inactiva</span>') +
                 '</td>' +
-                '<td>' +
-                    '<div class="actions" style="justify-content:flex-end;">' +
-                        '<button class="btn-icon-sm" data-act="view"   type="button" title="Consultar"><i class="fa-solid fa-eye"></i></button>' +
-                        '<button class="btn-icon-sm" data-act="edit"   type="button" title="Editar"><i class="fa-solid fa-pencil"></i></button>' +
-                        '<button class="btn-icon-sm" data-act="delete" type="button" title="Eliminar"><i class="fa-solid fa-trash"></i></button>' +
+                '<td style="text-align:center;">' +
+                    '<div class="actions" style="justify-content:center;">' +
+                        '<button class="btn-icon-sm" data-act="menu" type="button" title="Más acciones">' +
+                            '<i class="fa-solid fa-bars"></i>' +
+                        '</button>' +
                     '</div>' +
                 '</td>' +
             '</tr>';
@@ -4048,62 +4084,53 @@
     }
 
     function modalFiltrosComunidadesHtml() {
-        function selOpt(value, label, current) {
-            var sel = String(current) === String(value) ? ' selected' : '';
-            return '<option value="' + e(value) + '"' + sel + '>' + e(label) + '</option>';
-        }
-        return '<div class="modal-backdrop" id="comFiltrosModal"><div class="modal">' +
+        return '<div class="modal-backdrop" id="comFiltrosModal"><div class="modal" style="max-width:560px;">' +
             '<div class="modal-header">' +
-                '<div class="modal-title"><span>Filtros</span></div>' +
-                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+                '<div class="modal-title"><i class="fa-solid fa-filter"></i> Filtros</div>' +
+                '<button class="btn btn-ghost" data-act="cerrar" type="button" title="Cerrar">&times;</button>' +
             '</div>' +
-            '<form id="comFiltrosForm" novalidate>' +
-                '<div class="modal-body">' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="cmflt-id">Código</label>' +
-                            '<input id="cmflt-id" type="number" min="1" step="1" inputmode="numeric" ' +
-                                'placeholder="Código del registro" value="' + e(comunidadesFiltros.filtro_id) + '"></div>' +
-                        '<div class="form-group"><label for="cmflt-nombre">Nombre</label>' +
-                            '<input id="cmflt-nombre" type="text" maxlength="255" ' +
-                                'placeholder="Nombre de la comunidad" value="' + e(comunidadesFiltros.nombre) + '"></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="cmflt-estado">Estado</label>' +
-                            '<select id="cmflt-estado">' +
-                                selOpt('',  'Todas',     comunidadesFiltros.estado) +
-                                selOpt('1', 'Activas',   comunidadesFiltros.estado) +
-                                selOpt('0', 'Inactivas', comunidadesFiltros.estado) +
-                            '</select></div>' +
-                        '<div class="form-group"><label for="cmflt-limit">Límite</label>' +
-                            '<input id="cmflt-limit" type="number" min="1" max="1000" step="1" ' +
-                                'inputmode="numeric" value="' + e(comunidadesFiltros.limit) + '"></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="cmflt-sort">Ordenar por</label>' +
-                            '<select id="cmflt-sort">' +
-                                selOpt('id',        'Código',    comunidadesFiltros.sort) +
-                                selOpt('nombre',    'Nombre',    comunidadesFiltros.sort) +
-                                selOpt('domicilio', 'Domicilio', comunidadesFiltros.sort) +
-                                selOpt('estado',    'Estado',    comunidadesFiltros.sort) +
-                            '</select></div>' +
-                        '<div class="form-group"><label for="cmflt-dir">Dirección</label>' +
-                            '<select id="cmflt-dir">' +
-                                selOpt('desc', 'Descendente', comunidadesFiltros.dir) +
-                                selOpt('asc',  'Ascendente',  comunidadesFiltros.dir) +
-                            '</select></div>' +
+            '<div class="modal-body">' +
+                '<div class="form-row">' +
+                    '<div class="form-group"><label for="cmflt-id">Código</label>' +
+                        '<input id="cmflt-id" type="number" min="1" step="1" inputmode="numeric" placeholder="ID de la comunidad…"></div>' +
+                    '<div class="form-group"><label for="cmflt-nombre">Nombre</label>' +
+                        '<input id="cmflt-nombre" type="text" maxlength="255" placeholder="Nombre de la comunidad"></div>' +
+                '</div>' +
+                '<div class="form-group">' +
+                    '<label>Estado del registro</label>' +
+                    '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+                        '<button type="button" class="filter-chip" data-chip="estado" data-value="" >Todas</button>' +
+                        '<button type="button" class="filter-chip" data-chip="estado" data-value="1">Activas</button>' +
+                        '<button type="button" class="filter-chip" data-chip="estado" data-value="0">Inactivas</button>' +
                     '</div>' +
                 '</div>' +
-                '<div class="modal-footer">' +
-                    '<button type="button" class="btn btn-ghost"     id="comFiltrosReset" >Limpiar</button>' +
-                    '<button type="button" class="btn btn-secondary" data-act="close"    >Cancelar</button>' +
-                    '<button type="submit"  class="btn btn-primary"                       >Aplicar</button>' +
+                '<div class="form-row form-row-3">' +
+                    '<div class="form-group"><label for="cmflt-limit">Límite</label>' +
+                        '<input id="cmflt-limit" type="number" min="1" max="1000" step="1" inputmode="numeric"></div>' +
+                    '<div class="form-group"><label for="cmflt-sort">Ordenar por</label>' +
+                        '<select id="cmflt-sort">' +
+                            '<option value="id">Código</option>' +
+                            '<option value="nombre">Nombre</option>' +
+                            '<option value="domicilio">Domicilio</option>' +
+                            '<option value="estado">Estado</option>' +
+                        '</select></div>' +
+                    '<div class="form-group"><label for="cmflt-dir">Dirección</label>' +
+                        '<select id="cmflt-dir">' +
+                            '<option value="desc">Descendente</option>' +
+                            '<option value="asc">Ascendente</option>' +
+                        '</select></div>' +
                 '</div>' +
-            '</form>' +
+            '</div>' +
+            '<div class="modal-footer">' +
+                '<button type="button" class="btn btn-ghost"   data-act="cerrar"  >Cerrar</button>' +
+                '<button type="button" class="btn btn-ghost"   data-act="limpiar" >Limpiar</button>' +
+                '<button type="button" class="btn btn-primary" data-act="aplicar" >Aplicar</button>' +
+            '</div>' +
         '</div></div>';
     }
 
     function modalConsultarComunidadHtml() {
-        return '<div class="modal-backdrop" id="comConsultar"><div class="modal">' +
+        return '<div class="modal-backdrop" id="comConsultar"><div class="modal modal-wide">' +
             '<div class="modal-header">' +
                 '<div class="modal-title">' +
                     '<span>Consultar comunidad</span>' +
@@ -4116,6 +4143,9 @@
             '</div>' +
             '<div class="modal-footer">' +
                 '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+                '<button type="button" class="btn btn-primary" id="comConsultarEditar">' +
+                    '<i class="fa-solid fa-pen"></i> Editar' +
+                '</button>' +
             '</div>' +
         '</div></div>';
     }
@@ -4141,16 +4171,21 @@
         var btnDelete  = document.getElementById('comConfirmBtn');
 
         var filtrosModal = document.getElementById('comFiltrosModal');
-        var filtrosForm  = document.getElementById('comFiltrosForm');
 
-        var consultarModal = document.getElementById('comConsultar');
-        var consultarSub   = document.getElementById('comConsultarSub');
-        var consultarBody  = document.getElementById('comConsultarBody');
+        var consultarModal  = document.getElementById('comConsultar');
+        var consultarSub    = document.getElementById('comConsultarSub');
+        var consultarBody   = document.getElementById('comConsultarBody');
+        var consultarEditar = document.getElementById('comConsultarEditar');
 
-        var pendingDeleteId = null;
-        var modoEdicion     = false;
+        var ctxMenu = document.getElementById('comCtxMenu');
+        var ctxId   = null;
 
-        function applyFilters() {
+        var pendingDeleteId   = null;
+        var modoEdicion       = false;
+        var consultarIdActual = null;
+
+        // --- Búsqueda rápida cliente ----------------------------------------
+        function applyClientFilter() {
             var q = searchInput.value.trim().toLowerCase();
             var visibles = 0;
             tbody.querySelectorAll('tr[data-id]').forEach(function (tr) {
@@ -4162,58 +4197,149 @@
             emptyState.style.display = (visibles === 0 && tbody.querySelector('tr[data-id]')) ? '' : 'none';
             searchClear.style.display = q ? '' : 'none';
         }
-
-        searchInput.addEventListener('input', applyFilters);
+        searchInput.addEventListener('input', applyClientFilter);
         searchClear.addEventListener('click', function () {
             searchInput.value = '';
-            applyFilters();
+            applyClientFilter();
             searchInput.focus();
         });
 
-        document.getElementById('comFiltros').addEventListener('click', function () {
-            filtrosModal.classList.add('open');
-        });
-        filtrosModal.addEventListener('click', function (ev) {
-            if (ev.target === filtrosModal || ev.target.closest('[data-act="close"]')) {
-                filtrosModal.classList.remove('open');
-            }
-        });
-        document.getElementById('comFiltrosReset').addEventListener('click', function () {
-            comunidadesFiltros.sort      = 'id';
-            comunidadesFiltros.dir       = 'desc';
-            comunidadesFiltros.limit     = 100;
-            comunidadesFiltros.filtro_id = '';
-            comunidadesFiltros.nombre    = '';
-            comunidadesFiltros.estado    = '';
-            filtrosModal.classList.remove('open');
-            navigate();
-        });
-        filtrosForm.addEventListener('submit', function (ev) {
-            ev.preventDefault();
-            comunidadesFiltros.filtro_id = document.getElementById('cmflt-id').value.trim();
-            comunidadesFiltros.nombre    = document.getElementById('cmflt-nombre').value.trim();
-            comunidadesFiltros.estado    = document.getElementById('cmflt-estado').value;
-            comunidadesFiltros.limit     = parseInt(document.getElementById('cmflt-limit').value, 10) || 100;
-            comunidadesFiltros.sort      = document.getElementById('cmflt-sort').value || 'id';
-            comunidadesFiltros.dir       = document.getElementById('cmflt-dir').value  || 'desc';
-            filtrosModal.classList.remove('open');
-            navigate();
+        // --- Refrescar ------------------------------------------------------
+        document.getElementById('comRefrescar').addEventListener('click', function () {
+            recargarComunidadesLista();
         });
 
+        // --- Modal de filtros (live apply + snapshot) -----------------------
+        var fFltId    = document.getElementById('cmflt-id');
+        var fFltNom   = document.getElementById('cmflt-nombre');
+        var fFltLim   = document.getElementById('cmflt-limit');
+        var fFltSort  = document.getElementById('cmflt-sort');
+        var fFltDir   = document.getElementById('cmflt-dir');
+        var fChipsEst = filtrosModal.querySelectorAll('.filter-chip[data-chip="estado"]');
+
+        function sincronizarFiltros() {
+            fFltId.value   = comunidadesFiltros.filtro_id;
+            fFltNom.value  = comunidadesFiltros.nombre;
+            fFltLim.value  = comunidadesFiltros.limit;
+            fFltSort.value = comunidadesFiltros.sort;
+            fFltDir.value  = comunidadesFiltros.dir;
+            fChipsEst.forEach(function (c) {
+                c.classList.toggle('active', c.dataset.value === String(comunidadesFiltros.estado || ''));
+            });
+        }
+        function abrirModalFiltros() {
+            comunidadesFiltrosSnapshot = Object.assign({}, comunidadesFiltros);
+            sincronizarFiltros();
+            filtrosModal.classList.add('open');
+        }
+        function cerrarModalFiltros() { filtrosModal.classList.remove('open'); }
+        function cancelarFiltros() {
+            if (comunidadesFiltrosSnapshot) {
+                Object.keys(comunidadesFiltrosSnapshot).forEach(function (k) {
+                    comunidadesFiltros[k] = comunidadesFiltrosSnapshot[k];
+                });
+                comunidadesFiltrosSnapshot = null;
+                recargarComunidadesLista();
+            }
+            cerrarModalFiltros();
+        }
+        function limpiarFiltros() {
+            Object.assign(comunidadesFiltros, comunidadesFiltrosDefault);
+            sincronizarFiltros();
+            recargarComunidadesLista();
+        }
+
+        document.getElementById('comFiltros').addEventListener('click', abrirModalFiltros);
+        filtrosModal.addEventListener('click', function (ev) {
+            if (ev.target === filtrosModal) { cancelarFiltros(); return; }
+            var b = ev.target.closest('button[data-act]');
+            if (!b) return;
+            if (b.dataset.act === 'cerrar')  cancelarFiltros();
+            if (b.dataset.act === 'limpiar') limpiarFiltros();
+            if (b.dataset.act === 'aplicar') { comunidadesFiltrosSnapshot = null; cerrarModalFiltros(); }
+        });
+
+        function liveApply(field, valueGetter) {
+            return function () {
+                comunidadesFiltros[field] = valueGetter();
+                recargarComunidadesLista();
+            };
+        }
+        fFltId.addEventListener('input',    liveApply('filtro_id', function () { return fFltId.value.trim(); }));
+        fFltNom.addEventListener('input',   liveApply('nombre',    function () { return fFltNom.value.trim(); }));
+        fFltLim.addEventListener('change',  liveApply('limit',     function () { return parseInt(fFltLim.value, 10) || 100; }));
+        fFltSort.addEventListener('change', liveApply('sort',      function () { return fFltSort.value || 'id'; }));
+        fFltDir.addEventListener('change',  liveApply('dir',       function () { return fFltDir.value  || 'desc'; }));
+        fChipsEst.forEach(function (chip) {
+            chip.addEventListener('click', function () {
+                comunidadesFiltros.estado = chip.dataset.value;
+                fChipsEst.forEach(function (c) { c.classList.toggle('active', c === chip); });
+                recargarComunidadesLista();
+            });
+        });
+
+        // --- Menú contextual de fila ---------------------------------------
+        function cerrarCtxMenu() {
+            ctxMenu.classList.remove('open');
+            ctxId = null;
+        }
+        ctxMenu.addEventListener('click', function (ev) {
+            var b = ev.target.closest('button[data-action]');
+            if (!b || ctxId == null) return;
+            var id = ctxId;
+            cerrarCtxMenu();
+            if (b.dataset.action === 'consultar')     abrirConsulta(id);
+            else if (b.dataset.action === 'editar')   abrirEdicion(id);
+            else if (b.dataset.action === 'eliminar') pedirEliminar(id);
+        });
+        conectarCierreCtxMenu(ctxMenu, cerrarCtxMenu);
+
+        // --- Filas: clic = Consultar, click derecho = ctx menu -------------
+        tbody.addEventListener('click', function (ev) {
+            var tr = ev.target.closest('tr[data-id]');
+            if (!tr) return;
+            var id = parseInt(tr.dataset.id, 10);
+            var btn = ev.target.closest('button[data-act="menu"]');
+            if (btn) {
+                ev.stopPropagation();
+                var rect = btn.getBoundingClientRect();
+                abrirCtxMenuFlotante(ctxMenu, rect.right - 200, rect.bottom + 4);
+                ctxId = id;
+                return;
+            }
+            if (ev.target.closest('a,input,select,button')) return;
+            abrirConsulta(id);
+        });
+        tbody.addEventListener('contextmenu', function (ev) {
+            var tr = ev.target.closest('tr[data-id]');
+            if (!tr) return;
+            ev.preventDefault();
+            var id = parseInt(tr.dataset.id, 10);
+            abrirCtxMenuFlotante(ctxMenu, ev.clientX, ev.clientY);
+            ctxId = id;
+        });
+
+        // --- Modal Consultar -----------------------------------------------
         consultarModal.addEventListener('click', function (ev) {
             if (ev.target === consultarModal || ev.target.closest('[data-act="close"]')) {
                 consultarModal.classList.remove('open');
             }
         });
+        consultarEditar.addEventListener('click', function () {
+            if (consultarIdActual == null) return;
+            consultarModal.classList.remove('open');
+            abrirEdicion(consultarIdActual);
+        });
 
         async function abrirConsulta(id) {
+            consultarIdActual = id;
             consultarSub.innerHTML  = '<code>#' + id + '</code>';
             consultarBody.innerHTML = '<div style="display:flex;justify-content:center;padding:24px"><div class="spin"></div></div>';
             consultarModal.classList.add('open');
 
             var c;
             try {
-                c = await api('/api/comunidades.php?id=' + id);
+                c = comunidadesRegistroCache[id] || (comunidadesRegistroCache[id] = await api('/api/comunidades.php?id=' + id));
             } catch (err) {
                 consultarBody.innerHTML = '<div class="alert alert-error">' + e(err.message) + '</div>';
                 return;
@@ -4230,17 +4356,17 @@
             consultarSub.innerHTML  = '<code>#' + c.id + '</code>';
             consultarBody.innerHTML =
                 abmRow    ('Código',                    '<code>#' + c.id + '</code>') +
-                abmRowTxt ('UUID',                       c.uuid,        'Sin UUID') +
-                abmRowTxt ('Nombre',                     c.nombre) +
-                abmRowTxt ('Domicilio',                  c.domicilio,   'Sin domicilio') +
-                abmRowRef ('Ciudad',                     c.ciudad,      c.ciudad_nombre, 'Sin ciudad') +
-                abmRowTxt ('Latitud',                    c.latitud,     'Sin latitud') +
-                abmRowTxt ('Longitud',                   c.longitud,    'Sin longitud') +
-                abmRowTxt ('Indicaciones de acceso',     c.indicaciones,'Sin indicaciones') +
-                abmRowTxt ('Policía',                    c.policia,     'Sin teléfono') +
-                abmRowTxt ('Ambulancia',                 c.ambulancia,  'Sin teléfono') +
-                abmRowTxt ('Bomberos',                   c.bomberos,    'Sin teléfono') +
                 abmRow    ('Estado',                     estadoBadge) +
+                abmRowTxt ('Nombre',                     c.nombre,       'Sin nombre',    true) +
+                abmRowTxt ('UUID',                       c.uuid,         'Sin UUID') +
+                abmRowTxt ('Domicilio',                  c.domicilio,    'Sin domicilio', true) +
+                abmRowRef ('Ciudad',                     c.ciudad,       c.ciudad_nombre, 'Sin ciudad') +
+                abmRowTxt ('Latitud',                    c.latitud,      'Sin latitud') +
+                abmRowTxt ('Longitud',                   c.longitud,     'Sin longitud') +
+                abmRowTxt ('Indicaciones de acceso',     c.indicaciones, 'Sin indicaciones', true) +
+                abmRowTxt ('Policía',                    c.policia,      'Sin teléfono') +
+                abmRowTxt ('Ambulancia',                 c.ambulancia,   'Sin teléfono') +
+                abmRowTxt ('Bomberos',                   c.bomberos,     'Sin teléfono') +
                 abmRowSiNo('Solvencia',                  c.solvencia) +
                 abmRowNum ('Inscripción',                c.inscripcion,  'Sin inscripción') +
                 abmRowNum ('Plan',                       c.plan,         'Sin plan') +
@@ -4267,16 +4393,17 @@
                 abmRowNum ('Modo',                       c.modo,         'Sin modo') +
                 abmRowRef ('Vendedor',                   c.vendedor,     c.vendedor_nombre, 'Sin vendedor') +
                 abmRowSiNo('WhatsApp habilitado',        c.wspHabilitado) +
-                abmRowTxt ('WhatsApp nombre',            c.wspNombre,    'Sin nombre') +
-                abmRowTxt ('WhatsApp descripción',       c.wspDescripcion, 'Sin descripción') +
-                abmRowTxt ('WhatsApp grupo',             c.wspGrupo,     'Sin grupo') +
-                abmRowTxt ('WhatsApp invitación',        c.wspInvitacion,'Sin link') +
-                abmRowTxt ('WhatsApp ícono',             c.wspIcono,     'Sin ícono') +
+                abmRowTxt ('WhatsApp nombre',            c.wspNombre,      'Sin nombre') +
+                abmRowTxt ('WhatsApp descripción',       c.wspDescripcion, 'Sin descripción', true) +
+                abmRowTxt ('WhatsApp grupo',             c.wspGrupo,       'Sin grupo') +
+                abmRowTxt ('WhatsApp invitación',        c.wspInvitacion,  'Sin link',        true) +
+                abmRowTxt ('WhatsApp ícono',             c.wspIcono,       'Sin ícono') +
                 abmRowNum ('WhatsApp miembros',          c.wspMiembros) +
                 abmRowTxt ('WhatsApp actualizado',       abmFecha(c.wspActualizado), 'Sin actualización') +
                 abmRowTxt ('WhatsApp renovado',          abmFecha(c.wspRenovado),    'Sin renovación');
         }
 
+        // --- Modal Alta / Edición -----------------------------------------
         function setEstadoLabel() {
             estadoLabel.textContent = fEstado.checked ? 'Activa' : 'Inactiva';
         }
@@ -4312,64 +4439,52 @@
             document.getElementById('com-nombre').focus();
         });
 
-        tbody.addEventListener('click', async function (ev) {
-            var btn = ev.target.closest('button[data-act]');
-            if (!btn) return;
-            var tr = btn.closest('tr[data-id]');
-            if (!tr) return;
-            var id = parseInt(tr.dataset.id, 10);
-
-            if (btn.dataset.act === 'view') {
-                abrirConsulta(id);
-                return;
+        async function abrirEdicion(id) {
+            try {
+                var c = await api('/api/comunidades.php?id=' + id);
+                comunidadesRegistroCache[id] = c;
+                modoEdicion = true;
+                resetForm();
+                fId.value = c.id;
+                modalTitulo.textContent = 'Editar comunidad';
+                modalSub.textContent    = '#' + c.id;
+                document.getElementById('com-nombre').value       = c.nombre       || '';
+                document.getElementById('com-domicilio').value    = c.domicilio    || '';
+                document.getElementById('com-indicaciones').value = c.indicaciones || '';
+                document.getElementById('com-policia').value      = c.policia      || '';
+                document.getElementById('com-ambulancia').value   = c.ambulancia   || '';
+                document.getElementById('com-bomberos').value     = c.bomberos     || '';
+                fEstado.checked = parseInt(c.estado, 10) === 1;
+                setEstadoLabel();
+                openModal();
+                document.getElementById('com-nombre').focus();
+            } catch (err) {
+                toast(err.message, true);
             }
+        }
 
-            if (btn.dataset.act === 'edit') {
-                try {
-                    var c = await api('/api/comunidades.php?id=' + id);
-                    modoEdicion = true;
-                    resetForm();
-                    fId.value = c.id;
-                    modalTitulo.textContent = 'Editar comunidad';
-                    modalSub.textContent    = '#' + c.id;
-                    document.getElementById('com-nombre').value       = c.nombre       || '';
-                    document.getElementById('com-domicilio').value    = c.domicilio    || '';
-                    document.getElementById('com-indicaciones').value = c.indicaciones || '';
-                    document.getElementById('com-policia').value      = c.policia      || '';
-                    document.getElementById('com-ambulancia').value   = c.ambulancia   || '';
-                    document.getElementById('com-bomberos').value     = c.bomberos     || '';
-                    fEstado.checked = parseInt(c.estado, 10) === 1;
-                    setEstadoLabel();
-                    openModal();
-                    document.getElementById('com-nombre').focus();
-                } catch (err) {
-                    toast(err.message, true);
-                }
-                return;
-            }
-
-            if (btn.dataset.act === 'delete') {
-                var nombre = (tr.querySelector('.td-nombre') || {}).textContent || ('#' + id);
-                confirmMsg.textContent = '¿Eliminar la comunidad "' + nombre.trim() + '"? Esta acción no se puede deshacer.';
-                pendingDeleteId = id;
-                confirmBox.classList.add('open');
-            }
-        });
-
+        function pedirEliminar(id) {
+            var tr = tbody.querySelector('tr[data-id="' + id + '"]');
+            var nombre = tr ? ((tr.querySelector('.td-nombre') || {}).textContent || '').trim() : '';
+            confirmMsg.textContent = nombre
+                ? '¿Eliminar la comunidad "' + nombre + '"? Esta acción no se puede deshacer.'
+                : '¿Eliminar la comunidad #' + id + '? Esta acción no se puede deshacer.';
+            pendingDeleteId = id;
+            confirmBox.classList.add('open');
+        }
         confirmBox.addEventListener('click', function (ev) {
             if (ev.target === confirmBox || ev.target.closest('[data-act="cancel"]')) {
                 confirmBox.classList.remove('open');
                 pendingDeleteId = null;
             }
         });
-
         btnDelete.addEventListener('click', async function () {
             if (!pendingDeleteId) return;
             btnDelete.disabled = true;
             try {
                 await api('/api/comunidades.php?id=' + pendingDeleteId, { method: 'DELETE' });
                 toast('Comunidad eliminada.');
-                navigate();
+                recargarComunidadesLista();
             } catch (err) {
                 toast(err.message, true);
             } finally {
@@ -4409,7 +4524,7 @@
                     toast('Comunidad creada.');
                 }
                 closeModal();
-                navigate();
+                recargarComunidadesLista();
             } catch (err) {
                 showFormError(err.message);
             } finally {
@@ -4417,12 +4532,12 @@
             }
         });
 
-        applyFilters();
+        applyClientFilter();
     }
 
     // -------- Vista: Casas ------------------------------------------------
 
-    var casasFiltros = {
+    var casasFiltrosDefault = {
         sort:      'id',
         dir:       'desc',
         limit:     100,
@@ -4432,6 +4547,11 @@
         monitoreo: '',
         estado:    ''
     };
+    var casasFiltros         = Object.assign({}, casasFiltrosDefault);
+    var casasFiltrosSnapshot = null;
+    var casasCache           = { comunidades: [] };
+    var casasRegistroCache   = {};
+    var casasBusquedaCliente = '';
 
     function casasQueryString() {
         var qs = [];
@@ -4444,65 +4564,145 @@
         return qs.length ? ('?' + qs.join('&')) : '';
     }
 
-    async function renderCasas(view) {
-        var data        = await api('/api/casas.php' + casasQueryString());
-        var casas       = data.casas       || [];
-        var kpis        = data.kpis        || {};
-        var comunidades = data.comunidades || [];
+    function casasFiltrosActivos() {
+        var n = 0;
+        Object.keys(casasFiltrosDefault).forEach(function (k) {
+            if (k === 'sort' || k === 'dir' || k === 'limit') return;
+            if (String(casasFiltros[k]) !== String(casasFiltrosDefault[k])) n++;
+        });
+        return n;
+    }
 
-        var filtrosActivos = (casasFiltros.filtro_id !== '' ? 1 : 0) +
-                             (casasFiltros.nombre    !== '' ? 1 : 0) +
-                             (casasFiltros.comunidad !== '' ? 1 : 0) +
-                             (casasFiltros.monitoreo !== '' ? 1 : 0) +
-                             (casasFiltros.estado    !== '' ? 1 : 0);
-        var badgeFiltros = filtrosActivos
-            ? ' <span class="badge badge-info" style="margin-left:6px;">' + filtrosActivos + '</span>'
-            : '';
+    function actualizarBadgeFiltrosCasas() {
+        var btn = document.getElementById('casFiltros');
+        if (!btn) return;
+        var badge = btn.querySelector('.btn-icon-badge');
+        var n = casasFiltrosActivos();
+        btn.classList.toggle('active', n > 0);
+        if (badge) {
+            badge.textContent = n || '';
+            badge.style.display = n ? '' : 'none';
+        }
+    }
+
+    function casasCountText(n) {
+        return 'Mostrando ' + n + ' resultado(s) (límite ' + casasFiltros.limit + ').';
+    }
+
+    function moduleHelpCasasHtml() {
+        return '<div class="module-help" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin-bottom:16px;box-shadow:var(--shadow);display:flex;gap:14px;align-items:center;">' +
+            '<div style="font-size:1.6rem;line-height:1;">🏠</div>' +
+            '<div style="font-size:.88rem;color:var(--muted);line-height:1.45;">' +
+                'Las casas son los domicilios pertenecientes a una comunidad, con su ubicación, titular y estado de monitoreo dentro del sistema.' +
+            '</div>' +
+        '</div>';
+    }
+
+    function renderCasasStats(kpis) {
+        return statCard('Total',        kpis.total        || 0, 'orange', 'Casas registradas') +
+               statCard('Monitoreadas', kpis.monitoreadas || 0, 'green',  'Con servicio activo') +
+               statCard('Activas',      kpis.activas      || 0, 'green',  'Estado operativo');
+    }
+
+    function toolbarCasasHtml() {
+        var n = casasFiltrosActivos();
+        var badge = '<span class="btn-icon-badge"' + (n ? '' : ' style="display:none;"') + '>' + (n || '') + '</span>';
+        var activo = n ? ' active' : '';
+        return '<div class="toolbar">' +
+            '<div class="toolbar-left" style="gap:8px;flex-wrap:wrap;">' +
+                '<div class="search-wrap">' +
+                    '<input type="search" id="casSearch" class="search-input" placeholder="🔍 Buscar nombre, domicilio o comunidad…">' +
+                    '<button class="search-clear" id="casSearchClear" type="button" style="display:none;">&times;</button>' +
+                '</div>' +
+                '<button class="btn btn-ghost btn-icon' + activo + '" id="casFiltros" type="button" title="Filtros">' +
+                    '<i class="fa-solid fa-filter"></i>' + badge +
+                '</button>' +
+                '<button class="btn btn-ghost btn-icon" id="casRefrescar" type="button" title="Refrescar">' +
+                    '<i class="fa-solid fa-rotate"></i>' +
+                '</button>' +
+            '</div>' +
+            '<div class="toolbar-right">' +
+                '<button class="btn btn-primary" id="casNuevo" type="button">+ Nueva casa</button>' +
+            '</div>' +
+        '</div>';
+    }
+
+    function ctxMenuCasasHtml() {
+        return '<div id="casCtxMenu" class="ctx-menu" role="menu">' +
+            '<button type="button" data-action="consultar" role="menuitem">' +
+                '<i class="fa-solid fa-eye"></i><span>Consultar</span>' +
+            '</button>' +
+            '<div class="ctx-menu-sep"></div>' +
+            '<button type="button" data-action="editar" role="menuitem">' +
+                '<i class="fa-solid fa-pen"></i><span>Editar</span>' +
+            '</button>' +
+            '<button type="button" data-action="eliminar" class="ctx-menu-danger" role="menuitem">' +
+                '<i class="fa-solid fa-trash"></i><span>Eliminar</span>' +
+            '</button>' +
+        '</div>';
+    }
+
+    function aplicarBusquedaClienteCasas() {
+        var tbody = document.getElementById('casTbody');
+        if (!tbody) return;
+        var q = casasBusquedaCliente.trim().toLowerCase();
+        tbody.querySelectorAll('tr[data-id]').forEach(function (tr) {
+            var hay = tr.dataset.search || '';
+            tr.style.display = (!q || hay.indexOf(q) !== -1) ? '' : 'none';
+        });
+    }
+
+    async function recargarCasasLista() {
+        try {
+            var data  = await api('/api/casas.php' + casasQueryString());
+            var casas = data.casas || [];
+            var kpis  = data.kpis  || {};
+            casasCache.comunidades = data.comunidades || [];
+            casasRegistroCache     = {};
+            var stats = document.getElementById('casStats');
+            var tbody = document.getElementById('casTbody');
+            var count = document.getElementById('casCount');
+            if (stats) stats.innerHTML = renderCasasStats(kpis);
+            if (tbody) tbody.innerHTML = renderFilasCasas(casas);
+            if (count) count.textContent = casasCountText(casas.length);
+            actualizarBadgeFiltrosCasas();
+            aplicarBusquedaClienteCasas();
+        } catch (err) {
+            toast(err.message, true);
+        }
+    }
+
+    async function renderCasas(view) {
+        var data  = await api('/api/casas.php' + casasQueryString());
+        var casas = data.casas || [];
+        var kpis  = data.kpis  || {};
+        casasCache.comunidades = data.comunidades || [];
+        casasRegistroCache     = {};
 
         view.innerHTML =
-            '<div class="page-header"><div>' +
-                '<h1>Casas</h1>' +
-                '<p>Domicilios pertenecientes a las comunidades.</p>' +
-            '</div></div>' +
+            moduleHelpCasasHtml() +
 
-            '<div class="stats-bar">' +
-                statCard('Total',        kpis.total        || 0, 'orange', 'Casas registradas') +
-                statCard('Monitoreadas', kpis.monitoreadas || 0, 'green',  'Con servicio activo') +
-                statCard('Activas',      kpis.activas      || 0, 'green',  'Estado operativo') +
-            '</div>' +
+            '<div class="stats-bar" id="casStats">' + renderCasasStats(kpis) + '</div>' +
 
-            '<div class="toolbar">' +
-                '<div class="toolbar-left">' +
-                    '<div class="search-wrap">' +
-                        '<input type="search" id="casSearch" class="search-input" placeholder="Buscar nombre o domicilio...">' +
-                        '<button class="search-clear" id="casSearchClear" type="button" style="display:none;">&times;</button>' +
-                    '</div>' +
-                    '<button class="btn btn-secondary" id="casFiltros" type="button">' +
-                        '<i class="fa-solid fa-filter"></i> Filtros' + badgeFiltros +
-                    '</button>' +
-                '</div>' +
-                '<div class="toolbar-right">' +
-                    '<button class="btn btn-primary" id="casNuevo" type="button">+ Nueva casa</button>' +
-                '</div>' +
-            '</div>' +
+            toolbarCasasHtml() +
 
             '<div class="table-card">' +
                 '<table><thead><tr>' +
-                    '<th>Código</th><th>Nombre</th><th>Comunidad</th><th>Domicilio</th><th>Monitoreo</th><th>Estado</th>' +
-                    '<th style="text-align:right;">Acciones</th>' +
+                    '<th>Código</th><th>Comunidad</th><th>Nombre</th><th>Domicilio</th><th>Monitoreo</th><th>Estado</th>' +
+                    '<th style="text-align:center;">Acciones</th>' +
                 '</tr></thead><tbody id="casTbody">' +
                 renderFilasCasas(casas) +
                 '</tbody></table>' +
-                '<div class="table-empty" id="casEmpty" style="display:none;">No hay casas que coincidan con la búsqueda.</div>' +
             '</div>' +
-            '<div class="text-muted text-sm" style="margin-top:10px;">' +
-                'Mostrando ' + casas.length + ' resultado(s) (límite ' + casasFiltros.limit + ').' +
+            '<div class="text-muted text-sm" id="casCount" style="margin-top:10px;">' +
+                casasCountText(casas.length) +
             '</div>' +
 
-            modalCasaHtml(comunidades) +
-            modalFiltrosCasasHtml(comunidades) +
+            modalCasaHtml(casasCache.comunidades) +
+            modalFiltrosCasasHtml(casasCache.comunidades) +
             modalConsultarCasaHtml() +
-            confirmDeleteCasaHtml();
+            confirmDeleteCasaHtml() +
+            ctxMenuCasasHtml();
 
         wireCasasView();
     }
@@ -4515,10 +4715,10 @@
             var monit = String(k.monitoreo || '') === '1';
             var act   = String(k.estado    || '') === '1';
             var busq  = String((k.nombre || '') + ' ' + (k.domicilio || '') + ' ' + (k.comunidad_nombre || '')).toLowerCase().trim();
-            return '<tr data-id="' + k.id + '" data-search="' + e(busq) + '">' +
+            return '<tr data-id="' + k.id + '" data-search="' + e(busq) + '" style="cursor:pointer;">' +
                 '<td class="td-id">#' + k.id + '</td>' +
-                '<td><div class="td-nombre">' + e(k.nombre || '—') + '</div></td>' +
                 '<td>' + e(k.comunidad_nombre || '—') + '</td>' +
+                '<td><div class="td-nombre">' + e(k.nombre || '—') + '</div></td>' +
                 '<td>' + e(k.domicilio || '—') + '</td>' +
                 '<td>' +
                     (monit
@@ -4530,11 +4730,11 @@
                         ? '<span class="badge badge-success">Activa</span>'
                         : '<span class="badge badge-danger">Inactiva</span>') +
                 '</td>' +
-                '<td>' +
-                    '<div class="actions" style="justify-content:flex-end;">' +
-                        '<button class="btn-icon-sm" data-act="view"   type="button" title="Consultar"><i class="fa-solid fa-eye"></i></button>' +
-                        '<button class="btn-icon-sm" data-act="edit"   type="button" title="Editar"><i class="fa-solid fa-pencil"></i></button>' +
-                        '<button class="btn-icon-sm" data-act="delete" type="button" title="Eliminar"><i class="fa-solid fa-trash"></i></button>' +
+                '<td style="text-align:center;">' +
+                    '<div class="actions" style="justify-content:center;">' +
+                        '<button class="btn-icon-sm" data-act="menu" type="button" title="Más acciones">' +
+                            '<i class="fa-solid fa-bars"></i>' +
+                        '</button>' +
                     '</div>' +
                 '</td>' +
             '</tr>';
@@ -4601,72 +4801,62 @@
 
     function modalFiltrosCasasHtml(comunidades) {
         var optsCom = comunidades.map(function (c) {
-            var sel = String(casasFiltros.comunidad) === String(c.id) ? ' selected' : '';
-            return '<option value="' + c.id + '"' + sel + '>' + e(c.nombre) + '</option>';
+            return '<option value="' + c.id + '">' + e(c.nombre) + '</option>';
         }).join('');
-        function selOpt(value, label, current) {
-            var sel = String(current) === String(value) ? ' selected' : '';
-            return '<option value="' + e(value) + '"' + sel + '>' + e(label) + '</option>';
-        }
 
-        return '<div class="modal-backdrop" id="casFiltrosModal"><div class="modal">' +
+        return '<div class="modal-backdrop" id="casFiltrosModal"><div class="modal" style="max-width:560px;">' +
             '<div class="modal-header">' +
-                '<div class="modal-title"><span>Filtros</span></div>' +
-                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+                '<div class="modal-title"><i class="fa-solid fa-filter"></i> Filtros</div>' +
+                '<button class="btn btn-ghost" data-act="cerrar" type="button" title="Cerrar">&times;</button>' +
             '</div>' +
-            '<form id="casFiltrosForm" novalidate>' +
-                '<div class="modal-body">' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="cflt-id">Código</label>' +
-                            '<input id="cflt-id" type="number" min="1" step="1" inputmode="numeric" ' +
-                                'placeholder="Código del registro" value="' + e(casasFiltros.filtro_id) + '"></div>' +
-                        '<div class="form-group"><label for="cflt-nombre">Nombre</label>' +
-                            '<input id="cflt-nombre" type="text" maxlength="255" ' +
-                                'placeholder="Nombre de la casa" value="' + e(casasFiltros.nombre) + '"></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="cflt-comunidad">Comunidad</label>' +
-                            '<select id="cflt-comunidad"><option value="">Todas</option>' + optsCom + '</select></div>' +
-                        '<div class="form-group"><label for="cflt-monitoreo">Monitoreo</label>' +
-                            '<select id="cflt-monitoreo">' +
-                                selOpt('',  'Todas', casasFiltros.monitoreo) +
-                                selOpt('1', 'Con monitoreo', casasFiltros.monitoreo) +
-                                selOpt('0', 'Sin monitoreo', casasFiltros.monitoreo) +
-                            '</select></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="cflt-estado">Estado</label>' +
-                            '<select id="cflt-estado">' +
-                                selOpt('',  'Todas',     casasFiltros.estado) +
-                                selOpt('1', 'Activas',   casasFiltros.estado) +
-                                selOpt('0', 'Inactivas', casasFiltros.estado) +
-                            '</select></div>' +
-                        '<div class="form-group"><label for="cflt-limit">Límite</label>' +
-                            '<input id="cflt-limit" type="number" min="1" max="1000" step="1" ' +
-                                'inputmode="numeric" value="' + e(casasFiltros.limit) + '"></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="cflt-sort">Ordenar por</label>' +
-                            '<select id="cflt-sort">' +
-                                selOpt('id',        'Código',    casasFiltros.sort) +
-                                selOpt('nombre',    'Nombre',    casasFiltros.sort) +
-                                selOpt('comunidad', 'Comunidad', casasFiltros.sort) +
-                                selOpt('domicilio', 'Domicilio', casasFiltros.sort) +
-                                selOpt('alta',      'Alta',      casasFiltros.sort) +
-                            '</select></div>' +
-                        '<div class="form-group"><label for="cflt-dir">Dirección</label>' +
-                            '<select id="cflt-dir">' +
-                                selOpt('desc', 'Descendente', casasFiltros.dir) +
-                                selOpt('asc',  'Ascendente',  casasFiltros.dir) +
-                            '</select></div>' +
+            '<div class="modal-body">' +
+                '<div class="form-row">' +
+                    '<div class="form-group"><label for="cflt-id">Código</label>' +
+                        '<input id="cflt-id" type="number" min="1" step="1" inputmode="numeric" placeholder="ID de la casa…"></div>' +
+                    '<div class="form-group"><label for="cflt-nombre">Nombre</label>' +
+                        '<input id="cflt-nombre" type="text" maxlength="255" placeholder="Nombre de la casa…"></div>' +
+                '</div>' +
+                '<div class="form-group"><label for="cflt-comunidad">Comunidad</label>' +
+                    '<select id="cflt-comunidad"><option value="">Todas</option>' + optsCom + '</select></div>' +
+                '<div class="form-group">' +
+                    '<label>Monitoreo</label>' +
+                    '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+                        '<button type="button" class="filter-chip" data-chip="monitoreo" data-value="" >Todas</button>' +
+                        '<button type="button" class="filter-chip" data-chip="monitoreo" data-value="1">Con monitoreo</button>' +
+                        '<button type="button" class="filter-chip" data-chip="monitoreo" data-value="0">Sin monitoreo</button>' +
                     '</div>' +
                 '</div>' +
-                '<div class="modal-footer">' +
-                    '<button type="button" class="btn btn-ghost"     id="casFiltrosReset" >Limpiar</button>' +
-                    '<button type="button" class="btn btn-secondary" data-act="close"    >Cancelar</button>' +
-                    '<button type="submit"  class="btn btn-primary"                       >Aplicar</button>' +
+                '<div class="form-group">' +
+                    '<label>Estado del registro</label>' +
+                    '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+                        '<button type="button" class="filter-chip" data-chip="estado" data-value="" >Todas</button>' +
+                        '<button type="button" class="filter-chip" data-chip="estado" data-value="1">Activas</button>' +
+                        '<button type="button" class="filter-chip" data-chip="estado" data-value="0">Inactivas</button>' +
+                    '</div>' +
                 '</div>' +
-            '</form>' +
+                '<div class="form-row form-row-3">' +
+                    '<div class="form-group"><label for="cflt-limit">Límite</label>' +
+                        '<input id="cflt-limit" type="number" min="1" max="1000" step="1" inputmode="numeric"></div>' +
+                    '<div class="form-group"><label for="cflt-sort">Ordenar por</label>' +
+                        '<select id="cflt-sort">' +
+                            '<option value="id">Código</option>' +
+                            '<option value="nombre">Nombre</option>' +
+                            '<option value="comunidad">Comunidad</option>' +
+                            '<option value="domicilio">Domicilio</option>' +
+                            '<option value="alta">Alta</option>' +
+                        '</select></div>' +
+                    '<div class="form-group"><label for="cflt-dir">Dirección</label>' +
+                        '<select id="cflt-dir">' +
+                            '<option value="desc">Descendente</option>' +
+                            '<option value="asc">Ascendente</option>' +
+                        '</select></div>' +
+                '</div>' +
+            '</div>' +
+            '<div class="modal-footer">' +
+                '<button type="button" class="btn btn-ghost"   data-act="cerrar"  >Cerrar</button>' +
+                '<button type="button" class="btn btn-ghost"   data-act="limpiar" >Limpiar</button>' +
+                '<button type="button" class="btn btn-primary" data-act="aplicar" >Aplicar</button>' +
+            '</div>' +
         '</div></div>';
     }
 
@@ -4684,6 +4874,9 @@
             '</div>' +
             '<div class="modal-footer">' +
                 '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+                '<button type="button" class="btn btn-primary" id="casConsultarEditar">' +
+                    '<i class="fa-solid fa-pen"></i> Editar' +
+                '</button>' +
             '</div>' +
         '</div></div>';
     }
@@ -4701,7 +4894,6 @@
 
     function wireCasasView() {
         var tbody       = document.getElementById('casTbody');
-        var emptyState  = document.getElementById('casEmpty');
         var searchInput = document.getElementById('casSearch');
         var searchClear = document.getElementById('casSearchClear');
 
@@ -4722,83 +4914,203 @@
         var btnDelete  = document.getElementById('casConfirmBtn');
 
         var filtrosModal = document.getElementById('casFiltrosModal');
-        var filtrosForm  = document.getElementById('casFiltrosForm');
 
-        var consultarModal = document.getElementById('casConsultar');
-        var consultarSub   = document.getElementById('casConsultarSub');
-        var consultarBody  = document.getElementById('casConsultarBody');
+        var consultarModal  = document.getElementById('casConsultar');
+        var consultarSub    = document.getElementById('casConsultarSub');
+        var consultarBody   = document.getElementById('casConsultarBody');
+        var consultarEditar = document.getElementById('casConsultarEditar');
 
-        var pendingDeleteId = null;
-        var modoEdicion     = false;
+        var ctxMenu = document.getElementById('casCtxMenu');
+        var ctxId   = null;
 
-        function applyFilters() {
-            var q = searchInput.value.trim().toLowerCase();
-            var visibles = 0;
-            tbody.querySelectorAll('tr[data-id]').forEach(function (tr) {
-                var haystack = tr.dataset.search || '';
-                var show = !q || haystack.indexOf(q) !== -1;
-                tr.style.display = show ? '' : 'none';
-                if (show) visibles++;
-            });
-            emptyState.style.display = (visibles === 0 && tbody.querySelector('tr[data-id]')) ? '' : 'none';
-            searchClear.style.display = q ? '' : 'none';
-        }
+        var pendingDeleteId   = null;
+        var modoEdicion       = false;
+        var consultarIdActual = null;
 
-        searchInput.addEventListener('input', applyFilters);
+        // --- Búsqueda rápida client-side --------------------------------
+        searchInput.value = casasBusquedaCliente;
+        searchClear.style.display = casasBusquedaCliente ? '' : 'none';
+        aplicarBusquedaClienteCasas();
+
+        searchInput.addEventListener('input', function () {
+            casasBusquedaCliente = searchInput.value;
+            searchClear.style.display = casasBusquedaCliente ? '' : 'none';
+            aplicarBusquedaClienteCasas();
+        });
         searchClear.addEventListener('click', function () {
+            casasBusquedaCliente = '';
             searchInput.value = '';
-            applyFilters();
+            searchClear.style.display = 'none';
+            aplicarBusquedaClienteCasas();
             searchInput.focus();
         });
 
-        document.getElementById('casFiltros').addEventListener('click', function () {
-            filtrosModal.classList.add('open');
-        });
-        filtrosModal.addEventListener('click', function (ev) {
-            if (ev.target === filtrosModal || ev.target.closest('[data-act="close"]')) {
-                filtrosModal.classList.remove('open');
-            }
-        });
-        document.getElementById('casFiltrosReset').addEventListener('click', function () {
-            casasFiltros.sort      = 'id';
-            casasFiltros.dir       = 'desc';
-            casasFiltros.limit     = 100;
-            casasFiltros.filtro_id = '';
-            casasFiltros.nombre    = '';
-            casasFiltros.comunidad = '';
-            casasFiltros.monitoreo = '';
-            casasFiltros.estado    = '';
-            filtrosModal.classList.remove('open');
-            navigate();
-        });
-        filtrosForm.addEventListener('submit', function (ev) {
-            ev.preventDefault();
-            casasFiltros.filtro_id = document.getElementById('cflt-id').value.trim();
-            casasFiltros.nombre    = document.getElementById('cflt-nombre').value.trim();
-            casasFiltros.comunidad = document.getElementById('cflt-comunidad').value;
-            casasFiltros.monitoreo = document.getElementById('cflt-monitoreo').value;
-            casasFiltros.estado    = document.getElementById('cflt-estado').value;
-            casasFiltros.limit     = parseInt(document.getElementById('cflt-limit').value, 10) || 100;
-            casasFiltros.sort      = document.getElementById('cflt-sort').value || 'id';
-            casasFiltros.dir       = document.getElementById('cflt-dir').value  || 'desc';
-            filtrosModal.classList.remove('open');
-            navigate();
+        // --- Refrescar ---------------------------------------------------
+        document.getElementById('casRefrescar').addEventListener('click', function () {
+            recargarCasasLista();
         });
 
+        // --- Modal de filtros (live apply + snapshot) -------------------
+        var fId_    = document.getElementById('cflt-id');
+        var fNombre = document.getElementById('cflt-nombre');
+        var fCom    = document.getElementById('cflt-comunidad');
+        var fLimit  = document.getElementById('cflt-limit');
+        var fSort   = document.getElementById('cflt-sort');
+        var fDir    = document.getElementById('cflt-dir');
+        var fChipsMonitoreo = filtrosModal.querySelectorAll('.filter-chip[data-chip="monitoreo"]');
+        var fChipsEstado    = filtrosModal.querySelectorAll('.filter-chip[data-chip="estado"]');
+
+        function sincronizarControlesFiltros() {
+            fId_.value    = casasFiltros.filtro_id;
+            fNombre.value = casasFiltros.nombre;
+            fCom.value    = casasFiltros.comunidad;
+            fLimit.value  = casasFiltros.limit;
+            fSort.value   = casasFiltros.sort;
+            fDir.value    = casasFiltros.dir;
+            fChipsMonitoreo.forEach(function (c) {
+                c.classList.toggle('active', c.dataset.value === String(casasFiltros.monitoreo || ''));
+            });
+            fChipsEstado.forEach(function (c) {
+                c.classList.toggle('active', c.dataset.value === String(casasFiltros.estado || ''));
+            });
+        }
+        function abrirModalFiltros() {
+            casasFiltrosSnapshot = Object.assign({}, casasFiltros);
+            sincronizarControlesFiltros();
+            filtrosModal.classList.add('open');
+        }
+        function cerrarModalFiltros() { filtrosModal.classList.remove('open'); }
+        function cancelarFiltros() {
+            if (casasFiltrosSnapshot) {
+                Object.keys(casasFiltrosSnapshot).forEach(function (k) {
+                    casasFiltros[k] = casasFiltrosSnapshot[k];
+                });
+                casasFiltrosSnapshot = null;
+                recargarCasasLista();
+            }
+            cerrarModalFiltros();
+        }
+        function limpiarFiltros() {
+            Object.assign(casasFiltros, casasFiltrosDefault);
+            sincronizarControlesFiltros();
+            recargarCasasLista();
+        }
+
+        document.getElementById('casFiltros').addEventListener('click', abrirModalFiltros);
+        filtrosModal.addEventListener('click', function (ev) {
+            if (ev.target === filtrosModal) { cancelarFiltros(); return; }
+            var b = ev.target.closest('button[data-act]');
+            if (!b) return;
+            if (b.dataset.act === 'cerrar')  cancelarFiltros();
+            if (b.dataset.act === 'limpiar') limpiarFiltros();
+            if (b.dataset.act === 'aplicar') { casasFiltrosSnapshot = null; cerrarModalFiltros(); }
+        });
+
+        function liveApply(field, valueGetter) {
+            return function () {
+                casasFiltros[field] = valueGetter();
+                recargarCasasLista();
+            };
+        }
+        fId_.addEventListener('input',    liveApply('filtro_id', function () { return fId_.value.trim(); }));
+        fNombre.addEventListener('input', liveApply('nombre',    function () { return fNombre.value.trim(); }));
+        fCom.addEventListener('change',   liveApply('comunidad', function () { return fCom.value; }));
+        fLimit.addEventListener('change', liveApply('limit',     function () { return parseInt(fLimit.value, 10) || 100; }));
+        fSort.addEventListener('change',  liveApply('sort',      function () { return fSort.value || 'id'; }));
+        fDir.addEventListener('change',   liveApply('dir',       function () { return fDir.value  || 'desc'; }));
+        fChipsMonitoreo.forEach(function (chip) {
+            chip.addEventListener('click', function () {
+                casasFiltros.monitoreo = chip.dataset.value;
+                fChipsMonitoreo.forEach(function (c) { c.classList.toggle('active', c === chip); });
+                recargarCasasLista();
+            });
+        });
+        fChipsEstado.forEach(function (chip) {
+            chip.addEventListener('click', function () {
+                casasFiltros.estado = chip.dataset.value;
+                fChipsEstado.forEach(function (c) { c.classList.toggle('active', c === chip); });
+                recargarCasasLista();
+            });
+        });
+
+        // --- Menú contextual de fila ------------------------------------
+        function cerrarCtxMenu() {
+            ctxMenu.classList.remove('open');
+            ctxId = null;
+        }
+        function abrirCtxMenu(x, y, id) {
+            ctxId = id;
+            ctxMenu.classList.add('open');
+            var rect = ctxMenu.getBoundingClientRect();
+            var w = rect.width, h = rect.height;
+            var vw = window.innerWidth, vh = window.innerHeight;
+            var left = Math.min(x, vw - w - 8);
+            var top  = Math.min(y, vh - h - 8);
+            ctxMenu.style.left = Math.max(8, left) + 'px';
+            ctxMenu.style.top  = Math.max(8, top)  + 'px';
+        }
+        ctxMenu.addEventListener('click', function (ev) {
+            var b = ev.target.closest('button[data-action]');
+            if (!b || ctxId == null) return;
+            var id = ctxId;
+            cerrarCtxMenu();
+            if (b.dataset.action === 'consultar')     abrirConsulta(id);
+            else if (b.dataset.action === 'editar')   abrirEdicion(id);
+            else if (b.dataset.action === 'eliminar') pedirEliminar(id);
+        });
+        document.addEventListener('click', function (ev) {
+            if (ctxMenu.classList.contains('open') && !ctxMenu.contains(ev.target)) cerrarCtxMenu();
+        });
+        document.addEventListener('scroll',  function () { cerrarCtxMenu(); }, true);
+        window.addEventListener('resize',    function () { cerrarCtxMenu(); });
+        document.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Escape') cerrarCtxMenu();
+        });
+
+        // --- Filas: clic = Consultar, click derecho = ctx menu ---------
+        tbody.addEventListener('click', function (ev) {
+            var tr = ev.target.closest('tr[data-id]');
+            if (!tr) return;
+            var id = parseInt(tr.dataset.id, 10);
+            var btn = ev.target.closest('button[data-act="menu"]');
+            if (btn) {
+                ev.stopPropagation();
+                var rect = btn.getBoundingClientRect();
+                abrirCtxMenu(rect.right - 200, rect.bottom + 4, id);
+                return;
+            }
+            if (ev.target.closest('a,input,select,button')) return;
+            abrirConsulta(id);
+        });
+        tbody.addEventListener('contextmenu', function (ev) {
+            var tr = ev.target.closest('tr[data-id]');
+            if (!tr) return;
+            ev.preventDefault();
+            var id = parseInt(tr.dataset.id, 10);
+            abrirCtxMenu(ev.clientX, ev.clientY, id);
+        });
+
+        // --- Modal Consultar --------------------------------------------
         consultarModal.addEventListener('click', function (ev) {
             if (ev.target === consultarModal || ev.target.closest('[data-act="close"]')) {
                 consultarModal.classList.remove('open');
             }
         });
+        consultarEditar.addEventListener('click', function () {
+            if (consultarIdActual == null) return;
+            consultarModal.classList.remove('open');
+            abrirEdicion(consultarIdActual);
+        });
 
         async function abrirConsulta(id) {
+            consultarIdActual       = id;
             consultarSub.innerHTML  = '<code>#' + id + '</code>';
             consultarBody.innerHTML = '<div style="display:flex;justify-content:center;padding:24px"><div class="spin"></div></div>';
             consultarModal.classList.add('open');
 
             var k;
             try {
-                k = await api('/api/casas.php?id=' + id);
+                k = casasRegistroCache[id] || (casasRegistroCache[id] = await api('/api/casas.php?id=' + id));
             } catch (err) {
                 consultarBody.innerHTML = '<div class="alert alert-error">' + e(err.message) + '</div>';
                 return;
@@ -4813,14 +5125,14 @@
 
             consultarSub.innerHTML  = '<code>#' + k.id + '</code>';
             consultarBody.innerHTML =
-                abmRow    ('Código',          '<code>#' + k.id + '</code>') +
+                abmRow    ('Código',           '<code>#' + k.id + '</code>') +
                 abmRowTxt ('Nombre',           k.nombre) +
                 abmRowRef ('Comunidad',        k.comunidad, k.comunidad_nombre, 'Sin comunidad') +
-                abmRowTxt ('Domicilio',        k.domicilio, 'Sin domicilio') +
+                abmRowTxt ('Domicilio',        k.domicilio, 'Sin domicilio', true) +
                 abmRowRef ('Ciudad',           k.ciudad,    k.ciudad_nombre,    'Sin ciudad') +
                 abmRowTxt ('Latitud',          k.latitud,   'Sin latitud') +
                 abmRowTxt ('Longitud',         k.longitud,  'Sin longitud') +
-                abmRowTxt ('Grupos',           k.grupos,    'Sin grupos') +
+                abmRowTxt ('Grupos',           k.grupos,    'Sin grupos', true) +
                 abmRowRef ('Usuario titular',  k.usuario,   k.usuario_nombre,   'Sin usuario') +
                 abmRowTxt ('Cliente',          k.cliente != null ? '#' + k.cliente : null,  'Sin cliente') +
                 abmRowTxt ('Contrato',         k.contrato != null ? '#' + k.contrato : null,'Sin contrato') +
@@ -4829,6 +5141,7 @@
                 abmRow    ('Estado',           estadoBadge);
         }
 
+        // --- Modal Alta / Edición --------------------------------------
         function setMonitoreoLabel() {
             monitoreoLabel.textContent = fMonitoreo.checked ? 'Con monitoreo' : 'Sin monitoreo';
         }
@@ -4870,65 +5183,52 @@
             document.getElementById('cas-nombre').focus();
         });
 
-        tbody.addEventListener('click', async function (ev) {
-            var btn = ev.target.closest('button[data-act]');
-            if (!btn) return;
-            var tr = btn.closest('tr[data-id]');
-            if (!tr) return;
-            var id = parseInt(tr.dataset.id, 10);
-
-            if (btn.dataset.act === 'view') {
-                abrirConsulta(id);
-                return;
+        async function abrirEdicion(id) {
+            try {
+                var k = casasRegistroCache[id] || (casasRegistroCache[id] = await api('/api/casas.php?id=' + id));
+                modoEdicion = true;
+                resetForm();
+                fId.value = k.id;
+                modalTitulo.textContent = 'Editar casa';
+                modalSub.textContent    = '#' + k.id;
+                document.getElementById('cas-nombre').value    = k.nombre    || '';
+                document.getElementById('cas-comunidad').value = k.comunidad != null ? k.comunidad : '';
+                document.getElementById('cas-domicilio').value = k.domicilio || '';
+                document.getElementById('cas-latitud').value   = k.latitud   || '';
+                document.getElementById('cas-longitud').value  = k.longitud  || '';
+                fMonitoreo.checked = String(k.monitoreo || '') === '1';
+                fEstado.checked    = String(k.estado    || '') === '1';
+                setMonitoreoLabel();
+                setEstadoLabel();
+                openModal();
+                document.getElementById('cas-nombre').focus();
+            } catch (err) {
+                toast(err.message, true);
             }
+        }
 
-            if (btn.dataset.act === 'edit') {
-                try {
-                    var k = await api('/api/casas.php?id=' + id);
-                    modoEdicion = true;
-                    resetForm();
-                    fId.value = k.id;
-                    modalTitulo.textContent = 'Editar casa';
-                    modalSub.textContent    = '#' + k.id;
-                    document.getElementById('cas-nombre').value    = k.nombre    || '';
-                    document.getElementById('cas-comunidad').value = k.comunidad != null ? k.comunidad : '';
-                    document.getElementById('cas-domicilio').value = k.domicilio || '';
-                    document.getElementById('cas-latitud').value   = k.latitud   || '';
-                    document.getElementById('cas-longitud').value  = k.longitud  || '';
-                    fMonitoreo.checked = String(k.monitoreo || '') === '1';
-                    fEstado.checked    = String(k.estado    || '') === '1';
-                    setMonitoreoLabel();
-                    setEstadoLabel();
-                    openModal();
-                    document.getElementById('cas-nombre').focus();
-                } catch (err) {
-                    toast(err.message, true);
-                }
-                return;
-            }
-
-            if (btn.dataset.act === 'delete') {
-                var nombre = (tr.querySelector('.td-nombre') || {}).textContent || ('#' + id);
-                confirmMsg.textContent = '¿Eliminar la casa "' + nombre.trim() + '"? Esta acción no se puede deshacer.';
-                pendingDeleteId = id;
-                confirmBox.classList.add('open');
-            }
-        });
-
+        function pedirEliminar(id) {
+            var tr = tbody.querySelector('tr[data-id="' + id + '"]');
+            var nombre = tr ? ((tr.querySelector('.td-nombre') || {}).textContent || '').trim() : '';
+            confirmMsg.textContent = nombre
+                ? '¿Eliminar la casa "' + nombre + '"? Esta acción no se puede deshacer.'
+                : '¿Eliminar la casa #' + id + '? Esta acción no se puede deshacer.';
+            pendingDeleteId = id;
+            confirmBox.classList.add('open');
+        }
         confirmBox.addEventListener('click', function (ev) {
             if (ev.target === confirmBox || ev.target.closest('[data-act="cancel"]')) {
                 confirmBox.classList.remove('open');
                 pendingDeleteId = null;
             }
         });
-
         btnDelete.addEventListener('click', async function () {
             if (!pendingDeleteId) return;
             btnDelete.disabled = true;
             try {
                 await api('/api/casas.php?id=' + pendingDeleteId, { method: 'DELETE' });
                 toast('Casa eliminada.');
-                navigate();
+                recargarCasasLista();
             } catch (err) {
                 toast(err.message, true);
             } finally {
@@ -4968,15 +5268,13 @@
                     toast('Casa creada.');
                 }
                 closeModal();
-                navigate();
+                recargarCasasLista();
             } catch (err) {
                 showFormError(err.message);
             } finally {
                 btnGuardar.disabled = false;
             }
         });
-
-        applyFilters();
     }
 
     // -------- Vista: Alarmas ----------------------------------------------
@@ -5125,7 +5423,7 @@
 
             '<div class="table-card">' +
                 '<table><thead><tr>' +
-                    '<th>Código</th><th>Nombre</th><th>Comunidad</th><th>Identidad</th><th>Conexión</th><th>Estado</th>' +
+                    '<th>Código</th><th>Comunidad</th><th>Nombre</th><th>Identidad</th><th>Conexión</th><th>Estado</th>' +
                     '<th style="text-align:center;">Acciones</th>' +
                 '</tr></thead><tbody id="alaTbody">' +
                 renderFilasAlarmas(alarmas, alarmasCache.onlineSec) +
@@ -5157,11 +5455,11 @@
             var busq   = String((a.nombre || '') + ' ' + (a.identidad || '') + ' ' + (a.domicilio || '') + ' ' + (a.comunidad_nombre || '')).toLowerCase().trim();
             return '<tr data-id="' + a.id + '" data-search="' + e(busq) + '" style="cursor:pointer;">' +
                 '<td class="td-id">#' + a.id + '</td>' +
+                '<td>' + e(a.comunidad_nombre || '—') + '</td>' +
                 '<td>' +
                     '<div class="td-nombre">' + e(a.nombre || '—') + '</div>' +
                     (a.domicilio ? '<div class="td-id">' + e(a.domicilio) + '</div>' : '') +
                 '</td>' +
-                '<td>' + e(a.comunidad_nombre || '—') + '</td>' +
                 '<td>' + e(a.identidad || '—') + '</td>' +
                 '<td>' +
                     (a.latido
@@ -7857,7 +8155,7 @@
 
     // -------- Vista: Equipos ----------------------------------------------
 
-    var equiposFiltros = {
+    var equiposFiltrosDefault = {
         sort:       'id',
         dir:        'desc',
         limit:      100,
@@ -7868,6 +8166,10 @@
         habilitado: '',
         asignado:   ''
     };
+    var equiposFiltros         = Object.assign({}, equiposFiltrosDefault);
+    var equiposFiltrosSnapshot = null;
+    var equiposCache           = { agentes: [], chips: [] };
+    var equiposRegistroCache   = {};
 
     function equiposQueryString() {
         var qs = [];
@@ -7880,69 +8182,100 @@
         return qs.length ? ('?' + qs.join('&')) : '';
     }
 
+    function equiposFiltrosActivos() {
+        var n = 0;
+        Object.keys(equiposFiltrosDefault).forEach(function (k) {
+            if (k === 'sort' || k === 'dir' || k === 'limit') return;
+            if (String(equiposFiltros[k]) !== String(equiposFiltrosDefault[k])) n++;
+        });
+        return n;
+    }
+
+    function equiposCountText(n) {
+        return 'Mostrando ' + n + ' resultado(s) (límite ' + equiposFiltros.limit + ').';
+    }
+
+    function moduleHelpEquiposHtml() {
+        return '<div class="module-help" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin-bottom:16px;box-shadow:var(--shadow);display:flex;gap:14px;align-items:center;">' +
+            '<div style="font-size:1.6rem;line-height:1;">🛰️</div>' +
+            '<div style="font-size:.88rem;color:var(--muted);line-height:1.45;">' +
+                'Los equipos son los dispositivos físicos instalados en cada casa que se comunican con la plataforma para reportar alarmas y ejecutar acciones, con su UUID, agente asociado, hardware, firmware y chip SIM.' +
+            '</div>' +
+        '</div>';
+    }
+
+    function renderEquiposStats(kpis) {
+        return statCard('Total',        kpis.total       || 0, 'orange', 'Equipos registrados') +
+               statCard('Habilitados',  kpis.habilitados || 0, 'green',  'Habilitado = Sí') +
+               statCard('Asignados',    kpis.asignados   || 0, 'green',  'Asignado = Sí') +
+               statCard('Sin asignar',  kpis.sin_asignar || 0, 'red',    'Disponibles para asignar');
+    }
+
+    async function recargarEquiposLista() {
+        try {
+            var data    = await api('/api/equipos.php' + equiposQueryString());
+            var equipos = data.equipos || [];
+            var kpis    = data.kpis    || {};
+            equiposCache.agentes = data.agentes || equiposCache.agentes;
+            equiposCache.chips   = data.chips   || equiposCache.chips;
+            equiposRegistroCache = {};
+            var stats = document.getElementById('eqStats');
+            var tbody = document.getElementById('eqTbody');
+            var count = document.getElementById('eqCount');
+            if (stats) stats.innerHTML = renderEquiposStats(kpis);
+            if (tbody) tbody.innerHTML = renderFilasEquipos(equipos);
+            if (count) count.textContent = equiposCountText(equipos.length);
+            var btn = document.getElementById('eqFiltros');
+            if (btn) {
+                var n = equiposFiltrosActivos();
+                var badge = btn.querySelector('.btn-icon-badge');
+                btn.classList.toggle('active', n > 0);
+                if (badge) {
+                    badge.textContent = n || '';
+                    badge.style.display = n ? '' : 'none';
+                }
+            }
+            var searchInput = document.getElementById('eqSearch');
+            if (searchInput) searchInput.dispatchEvent(new Event('input'));
+        } catch (err) {
+            toast(err.message, true);
+        }
+    }
+
     async function renderEquipos(view) {
         var data    = await api('/api/equipos.php' + equiposQueryString());
         var equipos = data.equipos || [];
         var kpis    = data.kpis    || {};
-        var agentes = data.agentes || [];
-        var chips   = data.chips   || [];
-
-        var filtrosActivos = (equiposFiltros.filtro_id  !== '' ? 1 : 0) +
-                             (equiposFiltros.nombre     !== '' ? 1 : 0) +
-                             (equiposFiltros.agente     !== '' ? 1 : 0) +
-                             (equiposFiltros.tipo       !== '' ? 1 : 0) +
-                             (equiposFiltros.habilitado !== '' ? 1 : 0) +
-                             (equiposFiltros.asignado   !== '' ? 1 : 0);
-        var badgeFiltros = filtrosActivos
-            ? ' <span class="badge badge-info" style="margin-left:6px;">' + filtrosActivos + '</span>'
-            : '';
+        equiposCache.agentes = data.agentes || [];
+        equiposCache.chips   = data.chips   || [];
+        equiposRegistroCache = {};
 
         view.innerHTML =
-            '<div class="page-header"><div>' +
-                '<h1>Equipos</h1>' +
-                '<p>Inventario de equipos asignables a alarmas y comunidades.</p>' +
-            '</div></div>' +
+            moduleHelpEquiposHtml() +
 
-            '<div class="stats-bar">' +
-                statCard('Total',        kpis.total       || 0, 'orange', 'Equipos registrados') +
-                statCard('Habilitados',  kpis.habilitados || 0, 'green',  'Habilitado = Sí') +
-                statCard('Asignados',    kpis.asignados   || 0, 'green',  'Asignado = Sí') +
-                statCard('Sin asignar',  kpis.sin_asignar || 0, 'red',    'Disponibles para asignar') +
-            '</div>' +
+            '<div class="stats-bar" id="eqStats">' + renderEquiposStats(kpis) + '</div>' +
 
-            '<div class="toolbar">' +
-                '<div class="toolbar-left">' +
-                    '<div class="search-wrap">' +
-                        '<input type="search" id="eqSearch" class="search-input" placeholder="Buscar nombre, UUID, serial...">' +
-                        '<button class="search-clear" id="eqSearchClear" type="button" style="display:none;">&times;</button>' +
-                    '</div>' +
-                    '<button class="btn btn-secondary" id="eqFiltros" type="button">' +
-                        '<i class="fa-solid fa-filter"></i> Filtros' + badgeFiltros +
-                    '</button>' +
-                '</div>' +
-                '<div class="toolbar-right">' +
-                    '<button class="btn btn-primary" id="eqNuevo" type="button">+ Nuevo equipo</button>' +
-                '</div>' +
-            '</div>' +
+            toolbarSeguridadHtml('eq', '🔍 Buscar nombre, UUID, serial…', '+ Nuevo equipo', equiposFiltrosActivos()) +
 
             '<div class="table-card">' +
                 '<table><thead><tr>' +
                     '<th>Código</th><th>Nombre</th><th>Agente</th><th>Tipo</th><th>Serial / Firmware</th>' +
                     '<th>Asignado</th><th>Habilitado</th>' +
-                    '<th style="text-align:right;">Acciones</th>' +
+                    '<th style="text-align:center;">Acciones</th>' +
                 '</tr></thead><tbody id="eqTbody">' +
                 renderFilasEquipos(equipos) +
                 '</tbody></table>' +
                 '<div class="table-empty" id="eqEmpty" style="display:none;">No hay equipos que coincidan con la búsqueda.</div>' +
             '</div>' +
-            '<div class="text-muted text-sm" style="margin-top:10px;">' +
-                'Mostrando ' + equipos.length + ' resultado(s) (límite ' + equiposFiltros.limit + ').' +
+            '<div class="text-muted text-sm" id="eqCount" style="margin-top:10px;">' +
+                equiposCountText(equipos.length) +
             '</div>' +
 
-            modalEquipoHtml(agentes, chips) +
-            modalFiltrosEquiposHtml(agentes) +
+            modalEquipoHtml(equiposCache.agentes, equiposCache.chips) +
+            modalFiltrosEquiposHtml(equiposCache.agentes) +
             modalConsultarEquipoHtml() +
-            confirmDeleteEquipoHtml();
+            confirmDeleteEquipoHtml() +
+            ctxMenuAbmHtml('eqCtxMenu');
 
         wireEquiposView();
     }
@@ -7958,7 +8291,7 @@
                 (eq.nombre || '') + ' ' + (eq.uuid || '') + ' ' + (eq.serial || '') + ' ' +
                 (eq.agente_nombre || '') + ' ' + (eq.hardware || '') + ' ' + (eq.firmware || '')
             ).toLowerCase().trim();
-            return '<tr data-id="' + eq.id + '" data-search="' + e(busq) + '">' +
+            return '<tr data-id="' + eq.id + '" data-search="' + e(busq) + '" style="cursor:pointer;">' +
                 '<td class="td-id">#' + eq.id + '</td>' +
                 '<td>' +
                     '<div class="td-nombre">' + e(eq.nombre || '—') + '</div>' +
@@ -7983,11 +8316,11 @@
                         ? '<span class="badge badge-success">Sí</span>'
                         : '<span class="badge badge-danger">No</span>') +
                 '</td>' +
-                '<td>' +
-                    '<div class="actions" style="justify-content:flex-end;">' +
-                        '<button class="btn-icon-sm" data-act="view"   type="button" title="Consultar"><i class="fa-solid fa-eye"></i></button>' +
-                        '<button class="btn-icon-sm" data-act="edit"   type="button" title="Editar"><i class="fa-solid fa-pencil"></i></button>' +
-                        '<button class="btn-icon-sm" data-act="delete" type="button" title="Eliminar"><i class="fa-solid fa-trash"></i></button>' +
+                '<td style="text-align:center;">' +
+                    '<div class="actions" style="justify-content:center;">' +
+                        '<button class="btn-icon-sm" data-act="menu" type="button" title="Más acciones">' +
+                            '<i class="fa-solid fa-bars"></i>' +
+                        '</button>' +
                     '</div>' +
                 '</td>' +
             '</tr>';
@@ -8074,82 +8407,72 @@
 
     function modalFiltrosEquiposHtml(agentes) {
         var optsAgente = agentes.map(function (a) {
-            var sel = String(equiposFiltros.agente) === String(a.id) ? ' selected' : '';
-            return '<option value="' + a.id + '"' + sel + '>' + e(a.nombre || ('#' + a.id)) + '</option>';
+            return '<option value="' + a.id + '">' + e(a.nombre || ('#' + a.id)) + '</option>';
         }).join('');
-        function selOpt(value, label, current) {
-            var sel = String(current) === String(value) ? ' selected' : '';
-            return '<option value="' + e(value) + '"' + sel + '>' + e(label) + '</option>';
-        }
 
-        return '<div class="modal-backdrop" id="eqFiltrosModal"><div class="modal">' +
+        return '<div class="modal-backdrop" id="eqFiltrosModal"><div class="modal" style="max-width:560px;">' +
             '<div class="modal-header">' +
-                '<div class="modal-title"><span>Filtros</span></div>' +
-                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+                '<div class="modal-title"><i class="fa-solid fa-filter"></i> Filtros</div>' +
+                '<button class="btn btn-ghost" data-act="cerrar" type="button" title="Cerrar">&times;</button>' +
             '</div>' +
-            '<form id="eqFiltrosForm" novalidate>' +
-                '<div class="modal-body">' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="eflt-id">Código</label>' +
-                            '<input id="eflt-id" type="number" min="1" step="1" inputmode="numeric" ' +
-                                'placeholder="Código del registro" value="' + e(equiposFiltros.filtro_id) + '"></div>' +
-                        '<div class="form-group"><label for="eflt-nombre">Nombre</label>' +
-                            '<input id="eflt-nombre" type="text" maxlength="100" ' +
-                                'placeholder="Nombre del equipo" value="' + e(equiposFiltros.nombre) + '"></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="eflt-agente">Agente</label>' +
-                            '<select id="eflt-agente"><option value="">Todos</option>' + optsAgente + '</select></div>' +
-                        '<div class="form-group"><label for="eflt-tipo">Tipo</label>' +
-                            '<input id="eflt-tipo" type="text" maxlength="1" value="' + e(equiposFiltros.tipo) + '" placeholder="A/B/C..."></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="eflt-habilitado">Habilitado</label>' +
-                            '<select id="eflt-habilitado">' +
-                                selOpt('',  'Todos', equiposFiltros.habilitado) +
-                                selOpt('S', 'Sí',    equiposFiltros.habilitado) +
-                                selOpt('N', 'No',    equiposFiltros.habilitado) +
-                            '</select></div>' +
-                        '<div class="form-group"><label for="eflt-asignado">Asignado</label>' +
-                            '<select id="eflt-asignado">' +
-                                selOpt('',  'Todos', equiposFiltros.asignado) +
-                                selOpt('S', 'Sí',    equiposFiltros.asignado) +
-                                selOpt('N', 'No',    equiposFiltros.asignado) +
-                            '</select></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="eflt-limit">Límite</label>' +
-                            '<input id="eflt-limit" type="number" min="1" max="1000" step="1" ' +
-                                'inputmode="numeric" value="' + e(equiposFiltros.limit) + '"></div>' +
-                    '</div>' +
-                    '<div class="form-row">' +
-                        '<div class="form-group"><label for="eflt-sort">Ordenar por</label>' +
-                            '<select id="eflt-sort">' +
-                                selOpt('id',         'Código',     equiposFiltros.sort) +
-                                selOpt('nombre',     'Nombre',     equiposFiltros.sort) +
-                                selOpt('agente',     'Agente',     equiposFiltros.sort) +
-                                selOpt('tipo',       'Tipo',       equiposFiltros.sort) +
-                                selOpt('serial',     'Serial',     equiposFiltros.sort) +
-                                selOpt('registrado', 'Registrado', equiposFiltros.sort) +
-                            '</select></div>' +
-                        '<div class="form-group"><label for="eflt-dir">Dirección</label>' +
-                            '<select id="eflt-dir">' +
-                                selOpt('desc', 'Descendente', equiposFiltros.dir) +
-                                selOpt('asc',  'Ascendente',  equiposFiltros.dir) +
-                            '</select></div>' +
+            '<div class="modal-body">' +
+                '<div class="form-row">' +
+                    '<div class="form-group"><label for="eflt-id">Código</label>' +
+                        '<input id="eflt-id" type="number" min="1" step="1" inputmode="numeric" placeholder="ID del equipo…"></div>' +
+                    '<div class="form-group"><label for="eflt-nombre">Nombre</label>' +
+                        '<input id="eflt-nombre" type="text" maxlength="100" placeholder="Nombre del equipo…"></div>' +
+                '</div>' +
+                '<div class="form-row">' +
+                    '<div class="form-group"><label for="eflt-agente">Agente</label>' +
+                        '<select id="eflt-agente"><option value="">Todos</option>' + optsAgente + '</select></div>' +
+                    '<div class="form-group"><label for="eflt-tipo">Tipo</label>' +
+                        '<input id="eflt-tipo" type="text" maxlength="1" placeholder="A/B/C…"></div>' +
+                '</div>' +
+                '<div class="form-group">' +
+                    '<label>Habilitado</label>' +
+                    '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+                        '<button type="button" class="filter-chip" data-chip="habilitado" data-value="" >Todos</button>' +
+                        '<button type="button" class="filter-chip" data-chip="habilitado" data-value="S">Sí</button>' +
+                        '<button type="button" class="filter-chip" data-chip="habilitado" data-value="N">No</button>' +
                     '</div>' +
                 '</div>' +
-                '<div class="modal-footer">' +
-                    '<button type="button" class="btn btn-ghost"     id="eqFiltrosReset" >Limpiar</button>' +
-                    '<button type="button" class="btn btn-secondary" data-act="close"    >Cancelar</button>' +
-                    '<button type="submit"  class="btn btn-primary"                       >Aplicar</button>' +
+                '<div class="form-group">' +
+                    '<label>Asignado</label>' +
+                    '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+                        '<button type="button" class="filter-chip" data-chip="asignado" data-value="" >Todos</button>' +
+                        '<button type="button" class="filter-chip" data-chip="asignado" data-value="S">Sí</button>' +
+                        '<button type="button" class="filter-chip" data-chip="asignado" data-value="N">No</button>' +
+                    '</div>' +
                 '</div>' +
-            '</form>' +
+                '<div class="form-row form-row-3">' +
+                    '<div class="form-group"><label for="eflt-limit">Límite</label>' +
+                        '<input id="eflt-limit" type="number" min="1" max="1000" step="1" inputmode="numeric"></div>' +
+                    '<div class="form-group"><label for="eflt-sort">Ordenar por</label>' +
+                        '<select id="eflt-sort">' +
+                            '<option value="id">Código</option>' +
+                            '<option value="nombre">Nombre</option>' +
+                            '<option value="agente">Agente</option>' +
+                            '<option value="tipo">Tipo</option>' +
+                            '<option value="serial">Serial</option>' +
+                            '<option value="registrado">Registrado</option>' +
+                        '</select></div>' +
+                    '<div class="form-group"><label for="eflt-dir">Dirección</label>' +
+                        '<select id="eflt-dir">' +
+                            '<option value="desc">Descendente</option>' +
+                            '<option value="asc">Ascendente</option>' +
+                        '</select></div>' +
+                '</div>' +
+            '</div>' +
+            '<div class="modal-footer">' +
+                '<button type="button" class="btn btn-ghost"   data-act="cerrar"  >Cerrar</button>' +
+                '<button type="button" class="btn btn-ghost"   data-act="limpiar" >Limpiar</button>' +
+                '<button type="button" class="btn btn-primary" data-act="aplicar" >Aplicar</button>' +
+            '</div>' +
         '</div></div>';
     }
 
     function modalConsultarEquipoHtml() {
-        return '<div class="modal-backdrop" id="eqConsultar"><div class="modal">' +
+        return '<div class="modal-backdrop" id="eqConsultar"><div class="modal modal-wide">' +
             '<div class="modal-header">' +
                 '<div class="modal-title">' +
                     '<span>Consultar equipo</span>' +
@@ -8162,6 +8485,9 @@
             '</div>' +
             '<div class="modal-footer">' +
                 '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+                '<button type="button" class="btn btn-primary" id="eqConsultarEditar">' +
+                    '<i class="fa-solid fa-pen"></i> Editar' +
+                '</button>' +
             '</div>' +
         '</div></div>';
     }
@@ -8200,16 +8526,21 @@
         var btnDelete  = document.getElementById('eqConfirmBtn');
 
         var filtrosModal = document.getElementById('eqFiltrosModal');
-        var filtrosForm  = document.getElementById('eqFiltrosForm');
 
-        var consultarModal = document.getElementById('eqConsultar');
-        var consultarSub   = document.getElementById('eqConsultarSub');
-        var consultarBody  = document.getElementById('eqConsultarBody');
+        var consultarModal  = document.getElementById('eqConsultar');
+        var consultarSub    = document.getElementById('eqConsultarSub');
+        var consultarBody   = document.getElementById('eqConsultarBody');
+        var consultarEditar = document.getElementById('eqConsultarEditar');
 
-        var pendingDeleteId = null;
-        var modoEdicion     = false;
+        var ctxMenu = document.getElementById('eqCtxMenu');
+        var ctxId   = null;
 
-        function applyFilters() {
+        var pendingDeleteId   = null;
+        var modoEdicion       = false;
+        var consultarIdActual = null;
+
+        // --- Búsqueda rápida cliente ----------------------------------------
+        function applyClientFilter() {
             var q = searchInput.value.trim().toLowerCase();
             var visibles = 0;
             tbody.querySelectorAll('tr[data-id]').forEach(function (tr) {
@@ -8221,64 +8552,166 @@
             emptyState.style.display = (visibles === 0 && tbody.querySelector('tr[data-id]')) ? '' : 'none';
             searchClear.style.display = q ? '' : 'none';
         }
-
-        searchInput.addEventListener('input', applyFilters);
+        searchInput.addEventListener('input', applyClientFilter);
         searchClear.addEventListener('click', function () {
             searchInput.value = '';
-            applyFilters();
+            applyClientFilter();
             searchInput.focus();
         });
 
-        document.getElementById('eqFiltros').addEventListener('click', function () {
-            filtrosModal.classList.add('open');
-        });
-        filtrosModal.addEventListener('click', function (ev) {
-            if (ev.target === filtrosModal || ev.target.closest('[data-act="close"]')) {
-                filtrosModal.classList.remove('open');
-            }
-        });
-        document.getElementById('eqFiltrosReset').addEventListener('click', function () {
-            equiposFiltros.sort       = 'id';
-            equiposFiltros.dir        = 'desc';
-            equiposFiltros.limit      = 100;
-            equiposFiltros.filtro_id  = '';
-            equiposFiltros.nombre     = '';
-            equiposFiltros.agente     = '';
-            equiposFiltros.tipo       = '';
-            equiposFiltros.habilitado = '';
-            equiposFiltros.asignado   = '';
-            filtrosModal.classList.remove('open');
-            navigate();
-        });
-        filtrosForm.addEventListener('submit', function (ev) {
-            ev.preventDefault();
-            equiposFiltros.filtro_id  = document.getElementById('eflt-id').value.trim();
-            equiposFiltros.nombre     = document.getElementById('eflt-nombre').value.trim();
-            equiposFiltros.agente     = document.getElementById('eflt-agente').value;
-            equiposFiltros.tipo       = document.getElementById('eflt-tipo').value.trim();
-            equiposFiltros.habilitado = document.getElementById('eflt-habilitado').value;
-            equiposFiltros.asignado   = document.getElementById('eflt-asignado').value;
-            equiposFiltros.limit      = parseInt(document.getElementById('eflt-limit').value, 10) || 100;
-            equiposFiltros.sort       = document.getElementById('eflt-sort').value || 'id';
-            equiposFiltros.dir        = document.getElementById('eflt-dir').value  || 'desc';
-            filtrosModal.classList.remove('open');
-            navigate();
+        // --- Refrescar -----------------------------------------------------
+        document.getElementById('eqRefrescar').addEventListener('click', function () {
+            recargarEquiposLista();
         });
 
+        // --- Modal de filtros (live apply + snapshot) ----------------------
+        var fFltId   = document.getElementById('eflt-id');
+        var fFltNom  = document.getElementById('eflt-nombre');
+        var fFltAge  = document.getElementById('eflt-agente');
+        var fFltTip  = document.getElementById('eflt-tipo');
+        var fFltLim  = document.getElementById('eflt-limit');
+        var fFltSort = document.getElementById('eflt-sort');
+        var fFltDir  = document.getElementById('eflt-dir');
+        var fChipsHab = filtrosModal.querySelectorAll('.filter-chip[data-chip="habilitado"]');
+        var fChipsAsi = filtrosModal.querySelectorAll('.filter-chip[data-chip="asignado"]');
+
+        function sincronizarFiltros() {
+            fFltId.value   = equiposFiltros.filtro_id;
+            fFltNom.value  = equiposFiltros.nombre;
+            fFltAge.value  = equiposFiltros.agente;
+            fFltTip.value  = equiposFiltros.tipo;
+            fFltLim.value  = equiposFiltros.limit;
+            fFltSort.value = equiposFiltros.sort;
+            fFltDir.value  = equiposFiltros.dir;
+            fChipsHab.forEach(function (c) {
+                c.classList.toggle('active', c.dataset.value === String(equiposFiltros.habilitado || ''));
+            });
+            fChipsAsi.forEach(function (c) {
+                c.classList.toggle('active', c.dataset.value === String(equiposFiltros.asignado || ''));
+            });
+        }
+        function abrirModalFiltros() {
+            equiposFiltrosSnapshot = Object.assign({}, equiposFiltros);
+            sincronizarFiltros();
+            filtrosModal.classList.add('open');
+        }
+        function cerrarModalFiltros() { filtrosModal.classList.remove('open'); }
+        function cancelarFiltros() {
+            if (equiposFiltrosSnapshot) {
+                Object.keys(equiposFiltrosSnapshot).forEach(function (k) {
+                    equiposFiltros[k] = equiposFiltrosSnapshot[k];
+                });
+                equiposFiltrosSnapshot = null;
+                recargarEquiposLista();
+            }
+            cerrarModalFiltros();
+        }
+        function limpiarFiltros() {
+            Object.assign(equiposFiltros, equiposFiltrosDefault);
+            sincronizarFiltros();
+            recargarEquiposLista();
+        }
+
+        document.getElementById('eqFiltros').addEventListener('click', abrirModalFiltros);
+        filtrosModal.addEventListener('click', function (ev) {
+            if (ev.target === filtrosModal) { cancelarFiltros(); return; }
+            var b = ev.target.closest('button[data-act]');
+            if (!b) return;
+            if (b.dataset.act === 'cerrar')  cancelarFiltros();
+            if (b.dataset.act === 'limpiar') limpiarFiltros();
+            if (b.dataset.act === 'aplicar') { equiposFiltrosSnapshot = null; cerrarModalFiltros(); }
+        });
+
+        function liveApply(field, valueGetter) {
+            return function () {
+                equiposFiltros[field] = valueGetter();
+                recargarEquiposLista();
+            };
+        }
+        fFltId.addEventListener('input',    liveApply('filtro_id', function () { return fFltId.value.trim(); }));
+        fFltNom.addEventListener('input',   liveApply('nombre',    function () { return fFltNom.value.trim(); }));
+        fFltAge.addEventListener('change',  liveApply('agente',    function () { return fFltAge.value; }));
+        fFltTip.addEventListener('input',   liveApply('tipo',      function () { return fFltTip.value.trim(); }));
+        fFltLim.addEventListener('change',  liveApply('limit',     function () { return parseInt(fFltLim.value, 10) || 100; }));
+        fFltSort.addEventListener('change', liveApply('sort',      function () { return fFltSort.value || 'id'; }));
+        fFltDir.addEventListener('change',  liveApply('dir',       function () { return fFltDir.value  || 'desc'; }));
+        fChipsHab.forEach(function (chip) {
+            chip.addEventListener('click', function () {
+                equiposFiltros.habilitado = chip.dataset.value;
+                fChipsHab.forEach(function (c) { c.classList.toggle('active', c === chip); });
+                recargarEquiposLista();
+            });
+        });
+        fChipsAsi.forEach(function (chip) {
+            chip.addEventListener('click', function () {
+                equiposFiltros.asignado = chip.dataset.value;
+                fChipsAsi.forEach(function (c) { c.classList.toggle('active', c === chip); });
+                recargarEquiposLista();
+            });
+        });
+
+        // --- Menú contextual de fila ---------------------------------------
+        function cerrarCtxMenu() {
+            ctxMenu.classList.remove('open');
+            ctxId = null;
+        }
+        ctxMenu.addEventListener('click', function (ev) {
+            var b = ev.target.closest('button[data-action]');
+            if (!b || ctxId == null) return;
+            var id = ctxId;
+            cerrarCtxMenu();
+            if (b.dataset.action === 'consultar')     abrirConsulta(id);
+            else if (b.dataset.action === 'editar')   abrirEdicion(id);
+            else if (b.dataset.action === 'eliminar') pedirEliminar(id);
+        });
+        conectarCierreCtxMenu(ctxMenu, cerrarCtxMenu);
+
+        // --- Filas: clic = Consultar, click derecho = ctx menu -------------
+        tbody.addEventListener('click', function (ev) {
+            var tr = ev.target.closest('tr[data-id]');
+            if (!tr) return;
+            var id = parseInt(tr.dataset.id, 10);
+            var btn = ev.target.closest('button[data-act="menu"]');
+            if (btn) {
+                ev.stopPropagation();
+                var rect = btn.getBoundingClientRect();
+                abrirCtxMenuFlotante(ctxMenu, rect.right - 200, rect.bottom + 4);
+                ctxId = id;
+                return;
+            }
+            if (ev.target.closest('a,input,select,button')) return;
+            abrirConsulta(id);
+        });
+        tbody.addEventListener('contextmenu', function (ev) {
+            var tr = ev.target.closest('tr[data-id]');
+            if (!tr) return;
+            ev.preventDefault();
+            var id = parseInt(tr.dataset.id, 10);
+            abrirCtxMenuFlotante(ctxMenu, ev.clientX, ev.clientY);
+            ctxId = id;
+        });
+
+        // --- Modal Consultar ----------------------------------------------
         consultarModal.addEventListener('click', function (ev) {
             if (ev.target === consultarModal || ev.target.closest('[data-act="close"]')) {
                 consultarModal.classList.remove('open');
             }
         });
+        consultarEditar.addEventListener('click', function () {
+            if (consultarIdActual == null) return;
+            consultarModal.classList.remove('open');
+            abrirEdicion(consultarIdActual);
+        });
 
         async function abrirConsulta(id) {
+            consultarIdActual = id;
             consultarSub.innerHTML  = '<code>#' + id + '</code>';
             consultarBody.innerHTML = '<div style="display:flex;justify-content:center;padding:24px"><div class="spin"></div></div>';
             consultarModal.classList.add('open');
 
             var eq;
             try {
-                eq = await api('/api/equipos.php?id=' + id);
+                eq = equiposRegistroCache[id] || (equiposRegistroCache[id] = await api('/api/equipos.php?id=' + id));
             } catch (err) {
                 consultarBody.innerHTML = '<div class="alert alert-error">' + e(err.message) + '</div>';
                 return;
@@ -8298,21 +8731,22 @@
             consultarSub.innerHTML  = '<code>#' + eq.id + '</code>' + (eq.uuid ? ' · ' + e(eq.uuid) : '');
             consultarBody.innerHTML =
                 abmRow    ('Código',              '<code>#' + eq.id + '</code>') +
-                abmRowTxt ('UUID',                 eq.uuid,        'Sin UUID') +
-                abmRowTxt ('Nombre',               eq.nombre,      'Sin nombre') +
-                abmRowRef ('Agente',               eq.agente,      eq.agente_nombre, 'Sin agente') +
-                abmRowTxt ('Tipo',                 eq.tipo,        'Sin tipo') +
-                abmRowTxt ('Serial',               eq.serial,      'Sin serial') +
-                abmRowTxt ('Hardware',             eq.hardware,    'Sin hardware') +
-                abmRowTxt ('Firmware',             eq.firmware,    'Sin firmware') +
-                abmRowTxt ('Chip',                 chipTxt,        'Sin chip') +
-                abmRowTxt ('Fecha de registro',    abmFecha(eq.registrado), 'Sin registro') +
-                abmRowTxt ('Control',              eq.control != null ? '#' + eq.control : null, 'Sin control') +
-                abmRow    ('Asignado',             asignBadge) +
-                abmRow    ('Habilitado',           habilBadge) +
-                abmRowTxt ('Parámetros',           eq.parametros,  'Sin parámetros');
+                abmRow    ('Asignado',            asignBadge) +
+                abmRow    ('Habilitado',          habilBadge) +
+                abmRowTxt ('UUID',                eq.uuid,        'Sin UUID') +
+                abmRowTxt ('Nombre',              eq.nombre,      'Sin nombre') +
+                abmRowRef ('Agente',              eq.agente,      eq.agente_nombre, 'Sin agente') +
+                abmRowTxt ('Tipo',                eq.tipo,        'Sin tipo') +
+                abmRowTxt ('Serial',              eq.serial,      'Sin serial') +
+                abmRowTxt ('Hardware',            eq.hardware,    'Sin hardware') +
+                abmRowTxt ('Firmware',            eq.firmware,    'Sin firmware') +
+                abmRowTxt ('Chip',                chipTxt,        'Sin chip') +
+                abmRowTxt ('Control',             eq.control != null ? '#' + eq.control : null, 'Sin control') +
+                abmRowTxt ('Fecha de registro',   abmFecha(eq.registrado), 'Sin registro') +
+                abmRowTxt ('Parámetros',          eq.parametros,  'Sin parámetros', true);
         }
 
+        // --- Modal Alta / Edición -----------------------------------------
         function setToggleLabels() {
             asigLabel.textContent = fAsignado.checked   ? 'Sí' : 'No';
             habLabel.textContent  = fHabilitado.checked ? 'Sí' : 'No';
@@ -8351,69 +8785,57 @@
             document.getElementById('eq-nombre').focus();
         });
 
-        tbody.addEventListener('click', async function (ev) {
-            var btn = ev.target.closest('button[data-act]');
-            if (!btn) return;
-            var tr = btn.closest('tr[data-id]');
-            if (!tr) return;
-            var id = parseInt(tr.dataset.id, 10);
-
-            if (btn.dataset.act === 'view') {
-                abrirConsulta(id);
-                return;
+        async function abrirEdicion(id) {
+            try {
+                var eq = await api('/api/equipos.php?id=' + id);
+                equiposRegistroCache[id] = eq;
+                modoEdicion = true;
+                resetForm();
+                fId.value = eq.id;
+                modalTitulo.textContent = 'Editar equipo';
+                modalSub.textContent    = '#' + eq.id + (eq.uuid ? ' · ' + eq.uuid : '');
+                document.getElementById('eq-nombre').value     = eq.nombre     || '';
+                document.getElementById('eq-uuid').value       = eq.uuid       || '';
+                document.getElementById('eq-agente').value     = eq.agente   != null ? eq.agente : '';
+                document.getElementById('eq-tipo').value       = eq.tipo       || '';
+                document.getElementById('eq-serial').value     = eq.serial     || '';
+                document.getElementById('eq-hardware').value   = eq.hardware   || '';
+                document.getElementById('eq-firmware').value   = eq.firmware   || '';
+                document.getElementById('eq-chip').value       = eq.chip     != null ? eq.chip : '';
+                document.getElementById('eq-control').value    = eq.control  != null ? eq.control : '';
+                document.getElementById('eq-parametros').value = eq.parametros || '';
+                fAsignado.checked   = String(eq.asignado   || '').toUpperCase() === 'S';
+                fHabilitado.checked = String(eq.habilitado || '').toUpperCase() === 'S';
+                setToggleLabels();
+                openModal();
+                document.getElementById('eq-nombre').focus();
+            } catch (err) {
+                toast(err.message, true);
             }
+        }
 
-            if (btn.dataset.act === 'edit') {
-                try {
-                    var eq = await api('/api/equipos.php?id=' + id);
-                    modoEdicion = true;
-                    resetForm();
-                    fId.value = eq.id;
-                    modalTitulo.textContent = 'Editar equipo';
-                    modalSub.textContent    = '#' + eq.id + (eq.uuid ? ' · ' + eq.uuid : '');
-                    document.getElementById('eq-nombre').value     = eq.nombre     || '';
-                    document.getElementById('eq-uuid').value       = eq.uuid       || '';
-                    document.getElementById('eq-agente').value     = eq.agente   != null ? eq.agente : '';
-                    document.getElementById('eq-tipo').value       = eq.tipo       || '';
-                    document.getElementById('eq-serial').value     = eq.serial     || '';
-                    document.getElementById('eq-hardware').value   = eq.hardware   || '';
-                    document.getElementById('eq-firmware').value   = eq.firmware   || '';
-                    document.getElementById('eq-chip').value       = eq.chip     != null ? eq.chip : '';
-                    document.getElementById('eq-control').value    = eq.control  != null ? eq.control : '';
-                    document.getElementById('eq-parametros').value = eq.parametros || '';
-                    fAsignado.checked   = String(eq.asignado   || '').toUpperCase() === 'S';
-                    fHabilitado.checked = String(eq.habilitado || '').toUpperCase() === 'S';
-                    setToggleLabels();
-                    openModal();
-                    document.getElementById('eq-nombre').focus();
-                } catch (err) {
-                    toast(err.message, true);
-                }
-                return;
-            }
-
-            if (btn.dataset.act === 'delete') {
-                var nombre = (tr.querySelector('.td-nombre') || {}).textContent || ('#' + id);
-                confirmMsg.textContent = '¿Eliminar el equipo "' + nombre.trim() + '"? Esta acción no se puede deshacer.';
-                pendingDeleteId = id;
-                confirmBox.classList.add('open');
-            }
-        });
-
+        function pedirEliminar(id) {
+            var tr = tbody.querySelector('tr[data-id="' + id + '"]');
+            var nombre = tr ? ((tr.querySelector('.td-nombre') || {}).textContent || '').trim() : '';
+            confirmMsg.textContent = nombre
+                ? '¿Eliminar el equipo "' + nombre + '"? Esta acción no se puede deshacer.'
+                : '¿Eliminar el equipo #' + id + '? Esta acción no se puede deshacer.';
+            pendingDeleteId = id;
+            confirmBox.classList.add('open');
+        }
         confirmBox.addEventListener('click', function (ev) {
             if (ev.target === confirmBox || ev.target.closest('[data-act="cancel"]')) {
                 confirmBox.classList.remove('open');
                 pendingDeleteId = null;
             }
         });
-
         btnDelete.addEventListener('click', async function () {
             if (!pendingDeleteId) return;
             btnDelete.disabled = true;
             try {
                 await api('/api/equipos.php?id=' + pendingDeleteId, { method: 'DELETE' });
                 toast('Equipo eliminado.');
-                navigate();
+                recargarEquiposLista();
             } catch (err) {
                 toast(err.message, true);
             } finally {
@@ -8459,7 +8881,7 @@
                     toast('Equipo creado.');
                 }
                 closeModal();
-                navigate();
+                recargarEquiposLista();
             } catch (err) {
                 showFormError(err.message);
             } finally {
@@ -8467,7 +8889,961 @@
             }
         });
 
-        applyFilters();
+        applyClientFilter();
+    }
+
+    // -------- Vista: Transceptores (brokers MQTT) -------------------------
+
+    var transceptoresFiltrosDefault = {
+        sort:           'id',
+        dir:            'desc',
+        limit:          100,
+        filtro_id:      '',
+        nombre:         '',
+        host:           '',
+        predeterminado: '',
+        habilitado:     ''
+    };
+    var transceptoresFiltros         = Object.assign({}, transceptoresFiltrosDefault);
+    var transceptoresFiltrosSnapshot = null;
+    var transceptoresRegistroCache   = {};
+
+    function transceptoresQueryString() {
+        var qs = [];
+        Object.keys(transceptoresFiltros).forEach(function (k) {
+            var v = transceptoresFiltros[k];
+            if (v !== '' && v != null) {
+                qs.push(encodeURIComponent(k) + '=' + encodeURIComponent(v));
+            }
+        });
+        return qs.length ? ('?' + qs.join('&')) : '';
+    }
+
+    function transceptoresFiltrosActivos() {
+        var n = 0;
+        Object.keys(transceptoresFiltrosDefault).forEach(function (k) {
+            if (k === 'sort' || k === 'dir' || k === 'limit') return;
+            if (String(transceptoresFiltros[k]) !== String(transceptoresFiltrosDefault[k])) n++;
+        });
+        return n;
+    }
+
+    function moduleHelpTransceptoresHtml() {
+        return '<div class="module-help" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin-bottom:16px;box-shadow:var(--shadow);display:flex;gap:14px;align-items:center;">' +
+            '<div style="font-size:1.6rem;line-height:1;">📡</div>' +
+            '<div style="font-size:.88rem;color:var(--muted);line-height:1.45;">' +
+                'Los transceptores son los brokers MQTT que las alarmas usan como canal de comunicación con la plataforma, con su host, sus puertos de comunicación y administración y las credenciales de acceso.' +
+            '</div>' +
+        '</div>';
+    }
+
+    function renderTransceptoresStats(kpis) {
+        return statCard('Total',          kpis.total          || 0, 'orange', 'Brokers registrados') +
+               statCard('Habilitados',    kpis.habilitados    || 0, 'green',  'Habilitado = Sí') +
+               statCard('Predeterminado', kpis.predeterminado || 0, 'green',  'Marcados como predeterminado');
+    }
+
+    async function recargarTransceptoresLista() {
+        try {
+            var data  = await api('/api/transceptores.php' + transceptoresQueryString());
+            var lista = data.transceptores || [];
+            var kpis  = data.kpis          || {};
+            transceptoresRegistroCache = {};
+            var stats = document.getElementById('txStats');
+            var tbody = document.getElementById('txTbody');
+            if (stats) stats.innerHTML = renderTransceptoresStats(kpis);
+            if (tbody) tbody.innerHTML = renderFilasTransceptores(lista);
+            var btn = document.getElementById('txFiltros');
+            if (btn) {
+                var n = transceptoresFiltrosActivos();
+                var badge = btn.querySelector('.btn-icon-badge');
+                btn.classList.toggle('active', n > 0);
+                if (badge) {
+                    badge.textContent = n || '';
+                    badge.style.display = n ? '' : 'none';
+                }
+            }
+            var searchInput = document.getElementById('txSearch');
+            if (searchInput) searchInput.dispatchEvent(new Event('input'));
+        } catch (err) {
+            toast(err.message, true);
+        }
+    }
+
+    async function renderTransceptores(view) {
+        var data  = await api('/api/transceptores.php' + transceptoresQueryString());
+        var lista = data.transceptores || [];
+        var kpis  = data.kpis          || {};
+        transceptoresRegistroCache = {};
+
+        view.innerHTML =
+            moduleHelpTransceptoresHtml() +
+
+            '<div class="stats-bar" id="txStats">' + renderTransceptoresStats(kpis) + '</div>' +
+
+            toolbarSeguridadHtml('tx', '🔍 Buscar nombre, host o usuario…', '+ Nuevo transceptor', transceptoresFiltrosActivos()) +
+
+            '<div class="table-card">' +
+                '<table><thead><tr>' +
+                    '<th>Código</th><th>Nombre</th><th>Host</th>' +
+                    '<th>Puerto administración</th><th>Puerto transmisión</th>' +
+                    '<th>Predeterminado</th><th>Habilitado</th>' +
+                    '<th style="text-align:center;">Acciones</th>' +
+                '</tr></thead><tbody id="txTbody">' +
+                renderFilasTransceptores(lista) +
+                '</tbody></table>' +
+                '<div class="table-empty" id="txEmpty" style="display:none;">No hay transceptores que coincidan con la búsqueda.</div>' +
+            '</div>' +
+
+            modalTransceptorHtml() +
+            modalFiltrosTransceptoresHtml() +
+            modalConsultarTransceptorHtml() +
+            confirmDeleteTransceptorHtml() +
+            ctxMenuTransceptorHtml();
+
+        wireTransceptoresView();
+    }
+
+    function renderFilasTransceptores(lista) {
+        if (!lista.length) {
+            return '<tr><td colspan="8" class="table-empty">No hay transceptores cargados.</td></tr>';
+        }
+        return lista.map(function (t) {
+            var habilitado     = String(t.habilitado     || '').toUpperCase() === 'S';
+            var predeterminado = String(t.predeterminado || '').toUpperCase() === 'S';
+            var busq = String(
+                (t.nombre || '') + ' ' + (t.host || '') + ' ' +
+                (t.administracion_usuario || '') + ' ' + (t.transmision_usuario || '') + ' ' +
+                (t.administracion_puerto  || '') + ' ' + (t.transmision_puerto  || '')
+            ).toLowerCase().trim();
+            return '<tr data-id="' + t.id + '" data-predet="' + (predeterminado ? 1 : 0) + '" data-search="' + e(busq) + '" style="cursor:pointer;">' +
+                '<td class="td-id">#' + t.id + '</td>' +
+                '<td>' +
+                    '<div class="td-nombre">' + e(t.nombre || '—') + '</div>' +
+                '</td>' +
+                '<td>' + e(t.host || '—') + '</td>' +
+                '<td>' + e(t.administracion_puerto != null ? String(t.administracion_puerto) : '—') + '</td>' +
+                '<td>' + e(t.transmision_puerto    != null ? String(t.transmision_puerto)    : '—') + '</td>' +
+                '<td>' +
+                    (predeterminado
+                        ? '<span class="badge badge-success">Sí</span>'
+                        : '<span class="badge badge-muted">No</span>') +
+                '</td>' +
+                '<td>' +
+                    (habilitado
+                        ? '<span class="badge badge-success">Sí</span>'
+                        : '<span class="badge badge-danger">No</span>') +
+                '</td>' +
+                '<td style="text-align:center;">' +
+                    '<div class="actions" style="justify-content:center;">' +
+                        '<button class="btn-icon-sm" data-act="menu" type="button" title="Más acciones">' +
+                            '<i class="fa-solid fa-bars"></i>' +
+                        '</button>' +
+                    '</div>' +
+                '</td>' +
+            '</tr>';
+        }).join('');
+    }
+
+    function ctxMenuTransceptorHtml() {
+        return '<div id="txCtxMenu" class="ctx-menu" role="menu">' +
+            '<button type="button" data-action="consultar" role="menuitem">' +
+                '<i class="fa-solid fa-eye"></i><span>Consultar</span>' +
+            '</button>' +
+            '<button type="button" data-action="toggle-predet" role="menuitem">' +
+                '<i class="fa-solid fa-star"></i><span>Predeterminado</span>' +
+            '</button>' +
+            '<button type="button" data-action="monitor" role="menuitem">' +
+                '<i class="fa-solid fa-terminal"></i><span>Monitor</span>' +
+            '</button>' +
+            '<button type="button" data-action="administrar" role="menuitem">' +
+                '<i class="fa-solid fa-up-right-from-square"></i><span>Administrar</span>' +
+            '</button>' +
+            '<div class="ctx-menu-sep"></div>' +
+            '<button type="button" data-action="editar" role="menuitem">' +
+                '<i class="fa-solid fa-pen"></i><span>Editar</span>' +
+            '</button>' +
+            '<button type="button" data-action="eliminar" class="ctx-menu-danger" role="menuitem">' +
+                '<i class="fa-solid fa-trash"></i><span>Eliminar</span>' +
+            '</button>' +
+        '</div>';
+    }
+
+    function modalTransceptorHtml() {
+        return '<div class="modal-backdrop" id="txModal"><div class="modal">' +
+            '<div class="modal-header">' +
+                '<div class="modal-title">' +
+                    '<span id="txModalTitulo">Nuevo transceptor</span>' +
+                    '<span class="modal-subtitle" id="txModalSub"></span>' +
+                '</div>' +
+                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+            '</div>' +
+            '<form id="txForm" novalidate>' +
+                '<input type="hidden" id="txId" value="">' +
+                '<div class="modal-body">' +
+                    '<div class="alert alert-error" id="txError" style="display:none;"></div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="tx-nombre">Nombre</label>' +
+                            '<input id="tx-nombre" name="nombre" type="text" maxlength="100" placeholder="Ej: Broker principal"></div>' +
+                        '<div class="form-group"><label for="tx-host">Host</label>' +
+                            '<input id="tx-host" name="host" type="text" maxlength="255" placeholder="mqtt.vigicom.net.ar"></div>' +
+                    '</div>' +
+
+                    '<div style="margin:8px 0 4px;font-size:.8rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);">Administración</div>' +
+                    '<div class="form-row form-row-3">' +
+                        '<div class="form-group"><label for="tx-adm-puerto">Puerto</label>' +
+                            '<input id="tx-adm-puerto" name="administracion_puerto" type="number" min="1" max="65535" step="1" placeholder="15672"></div>' +
+                        '<div class="form-group"><label for="tx-adm-usuario">Usuario</label>' +
+                            '<input id="tx-adm-usuario" name="administracion_usuario" type="text" maxlength="100" autocomplete="off"></div>' +
+                        '<div class="form-group"><label for="tx-adm-contrasena">Contraseña</label>' +
+                            '<input id="tx-adm-contrasena" name="administracion_contrasena" type="text" maxlength="255" autocomplete="off"></div>' +
+                    '</div>' +
+
+                    '<div style="margin:12px 0 4px;font-size:.8rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);">Transmisión</div>' +
+                    '<div class="form-row form-row-3">' +
+                        '<div class="form-group"><label for="tx-trn-puerto">Puerto</label>' +
+                            '<input id="tx-trn-puerto" name="transmision_puerto" type="number" min="1" max="65535" step="1" placeholder="1883"></div>' +
+                        '<div class="form-group"><label for="tx-trn-usuario">Usuario</label>' +
+                            '<input id="tx-trn-usuario" name="transmision_usuario" type="text" maxlength="100" autocomplete="off"></div>' +
+                        '<div class="form-group"><label for="tx-trn-contrasena">Contraseña</label>' +
+                            '<input id="tx-trn-contrasena" name="transmision_contrasena" type="text" maxlength="255" autocomplete="off"></div>' +
+                    '</div>' +
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label for="tx-trn-entrada">Topic de entrada</label>' +
+                            '<input id="tx-trn-entrada" name="transmision_entrada" type="text" maxlength="255" autocomplete="off" placeholder="alarmas/+/eventos" style="font-family:monospace;"></div>' +
+                        '<div class="form-group"><label for="tx-trn-salida">Topic de salida</label>' +
+                            '<input id="tx-trn-salida" name="transmision_salida" type="text" maxlength="255" autocomplete="off" placeholder="alarmas/+/comandos" style="font-family:monospace;"></div>' +
+                    '</div>' +
+
+                    '<div class="form-row">' +
+                        '<div class="form-group"><label>Predeterminado</label>' +
+                            '<label class="toggle-switch" style="margin-top:6px;">' +
+                                '<input id="tx-predeterminado" name="predeterminado" type="checkbox" value="1">' +
+                                '<span class="toggle-track"><span class="toggle-thumb"></span></span>' +
+                                '<span class="toggle-label" id="txPredetLabel">No</span>' +
+                            '</label></div>' +
+                        '<div class="form-group"><label>Habilitado</label>' +
+                            '<label class="toggle-switch" style="margin-top:6px;">' +
+                                '<input id="tx-habilitado" name="habilitado" type="checkbox" value="1" checked>' +
+                                '<span class="toggle-track"><span class="toggle-thumb"></span></span>' +
+                                '<span class="toggle-label" id="txHabilitadoLabel">Sí</span>' +
+                            '</label></div>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="modal-footer">' +
+                    '<button type="button" class="btn btn-ghost" data-act="close">Cancelar</button>' +
+                    '<button type="submit" class="btn btn-primary" id="txGuardar">Guardar</button>' +
+                '</div>' +
+            '</form>' +
+        '</div></div>';
+    }
+
+    function confirmDeleteTransceptorHtml() {
+        return '<div class="confirm-backdrop" id="txConfirm"><div class="confirm-box">' +
+            '<div class="confirm-title">Eliminar transceptor</div>' +
+            '<div class="confirm-msg" id="txConfirmMsg">Esta acción no se puede deshacer.</div>' +
+            '<div class="confirm-actions">' +
+                '<button class="btn btn-ghost"  data-act="cancel" type="button">Cancelar</button>' +
+                '<button class="btn btn-danger" id="txConfirmBtn" type="button">Eliminar</button>' +
+            '</div>' +
+        '</div></div>';
+    }
+
+    function modalFiltrosTransceptoresHtml() {
+        return '<div class="modal-backdrop" id="txFiltrosModal"><div class="modal" style="max-width:560px;">' +
+            '<div class="modal-header">' +
+                '<div class="modal-title"><i class="fa-solid fa-filter"></i> Filtros</div>' +
+                '<button class="btn btn-ghost" data-act="cerrar" type="button" title="Cerrar">&times;</button>' +
+            '</div>' +
+            '<div class="modal-body">' +
+                '<div class="form-row">' +
+                    '<div class="form-group"><label for="tflt-id">Código</label>' +
+                        '<input id="tflt-id" type="number" min="1" step="1" inputmode="numeric" placeholder="ID del transceptor…"></div>' +
+                    '<div class="form-group"><label for="tflt-nombre">Nombre</label>' +
+                        '<input id="tflt-nombre" type="text" maxlength="100" placeholder="Nombre del transceptor…"></div>' +
+                '</div>' +
+                '<div class="form-row">' +
+                    '<div class="form-group" style="flex:1 1 100%;"><label for="tflt-host">Host</label>' +
+                        '<input id="tflt-host" type="text" maxlength="255" placeholder="Host del broker (mqtt.vigicom.net.ar…)"></div>' +
+                '</div>' +
+                '<div class="form-group">' +
+                    '<label>Predeterminado</label>' +
+                    '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+                        '<button type="button" class="filter-chip" data-chip="predeterminado" data-value="" >Todos</button>' +
+                        '<button type="button" class="filter-chip" data-chip="predeterminado" data-value="S">Sí</button>' +
+                        '<button type="button" class="filter-chip" data-chip="predeterminado" data-value="N">No</button>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="form-group">' +
+                    '<label>Habilitado</label>' +
+                    '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+                        '<button type="button" class="filter-chip" data-chip="habilitado" data-value="" >Todos</button>' +
+                        '<button type="button" class="filter-chip" data-chip="habilitado" data-value="S">Sí</button>' +
+                        '<button type="button" class="filter-chip" data-chip="habilitado" data-value="N">No</button>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="form-row form-row-3">' +
+                    '<div class="form-group"><label for="tflt-limit">Límite</label>' +
+                        '<input id="tflt-limit" type="number" min="1" max="1000" step="1" inputmode="numeric"></div>' +
+                    '<div class="form-group"><label for="tflt-sort">Ordenar por</label>' +
+                        '<select id="tflt-sort">' +
+                            '<option value="id">Código</option>' +
+                            '<option value="nombre">Nombre</option>' +
+                            '<option value="host">Host</option>' +
+                            '<option value="administracion_puerto">Puerto administración</option>' +
+                            '<option value="transmision_puerto">Puerto transmisión</option>' +
+                        '</select></div>' +
+                    '<div class="form-group"><label for="tflt-dir">Dirección</label>' +
+                        '<select id="tflt-dir">' +
+                            '<option value="desc">Descendente</option>' +
+                            '<option value="asc">Ascendente</option>' +
+                        '</select></div>' +
+                '</div>' +
+            '</div>' +
+            '<div class="modal-footer">' +
+                '<button type="button" class="btn btn-ghost"   data-act="cerrar"  >Cerrar</button>' +
+                '<button type="button" class="btn btn-ghost"   data-act="limpiar" >Limpiar</button>' +
+                '<button type="button" class="btn btn-primary" data-act="aplicar" >Aplicar</button>' +
+            '</div>' +
+        '</div></div>';
+    }
+
+    function modalConsultarTransceptorHtml() {
+        return '<div class="modal-backdrop" id="txConsultar"><div class="modal modal-wide">' +
+            '<div class="modal-header">' +
+                '<div class="modal-title">' +
+                    '<span>Consultar transceptor</span>' +
+                    '<span class="modal-subtitle" id="txConsultarSub"></span>' +
+                '</div>' +
+                '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+            '</div>' +
+            '<div class="modal-body">' +
+                '<dl class="data-list" id="txConsultarBody"></dl>' +
+            '</div>' +
+            '<div class="modal-footer">' +
+                '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+                '<button type="button" class="btn btn-primary" id="txConsultarEditar">' +
+                    '<i class="fa-solid fa-pen"></i> Editar' +
+                '</button>' +
+            '</div>' +
+        '</div></div>';
+    }
+
+    function wireTransceptoresView() {
+        var tbody       = document.getElementById('txTbody');
+        var emptyState  = document.getElementById('txEmpty');
+        var searchInput = document.getElementById('txSearch');
+        var searchClear = document.getElementById('txSearchClear');
+
+        var modal       = document.getElementById('txModal');
+        var modalTitulo = document.getElementById('txModalTitulo');
+        var modalSub    = document.getElementById('txModalSub');
+        var modalError  = document.getElementById('txError');
+        var form        = document.getElementById('txForm');
+        var fId         = document.getElementById('txId');
+        var fPredet     = document.getElementById('tx-predeterminado');
+        var fHabilitado = document.getElementById('tx-habilitado');
+        var predetLabel = document.getElementById('txPredetLabel');
+        var habLabel    = document.getElementById('txHabilitadoLabel');
+        var btnGuardar  = document.getElementById('txGuardar');
+
+        var confirmBox = document.getElementById('txConfirm');
+        var confirmMsg = document.getElementById('txConfirmMsg');
+        var btnDelete  = document.getElementById('txConfirmBtn');
+
+        var filtrosModal = document.getElementById('txFiltrosModal');
+
+        var consultarModal  = document.getElementById('txConsultar');
+        var consultarSub    = document.getElementById('txConsultarSub');
+        var consultarBody   = document.getElementById('txConsultarBody');
+        var consultarEditar = document.getElementById('txConsultarEditar');
+
+        var ctxMenu = document.getElementById('txCtxMenu');
+        var ctxId   = null;
+
+        var pendingDeleteId   = null;
+        var modoEdicion       = false;
+        var consultarIdActual = null;
+
+        // --- Búsqueda rápida cliente ----------------------------------------
+        function applyClientFilter() {
+            var q = searchInput.value.trim().toLowerCase();
+            var visibles = 0;
+            tbody.querySelectorAll('tr[data-id]').forEach(function (tr) {
+                var haystack = tr.dataset.search || '';
+                var show = !q || haystack.indexOf(q) !== -1;
+                tr.style.display = show ? '' : 'none';
+                if (show) visibles++;
+            });
+            emptyState.style.display = (visibles === 0 && tbody.querySelector('tr[data-id]')) ? '' : 'none';
+            searchClear.style.display = q ? '' : 'none';
+        }
+        searchInput.addEventListener('input', applyClientFilter);
+        searchClear.addEventListener('click', function () {
+            searchInput.value = '';
+            applyClientFilter();
+            searchInput.focus();
+        });
+
+        // --- Refrescar -----------------------------------------------------
+        document.getElementById('txRefrescar').addEventListener('click', function () {
+            recargarTransceptoresLista();
+        });
+
+        // --- Modal de filtros (live apply + snapshot) ----------------------
+        var fFltId    = document.getElementById('tflt-id');
+        var fFltNom   = document.getElementById('tflt-nombre');
+        var fFltHost  = document.getElementById('tflt-host');
+        var fFltLim   = document.getElementById('tflt-limit');
+        var fFltSort  = document.getElementById('tflt-sort');
+        var fFltDir   = document.getElementById('tflt-dir');
+        var fChipsPre = filtrosModal.querySelectorAll('.filter-chip[data-chip="predeterminado"]');
+        var fChipsHab = filtrosModal.querySelectorAll('.filter-chip[data-chip="habilitado"]');
+
+        function sincronizarChips(chips, valor) {
+            chips.forEach(function (c) {
+                c.classList.toggle('active', c.dataset.value === String(valor || ''));
+            });
+        }
+        function sincronizarFiltros() {
+            fFltId.value   = transceptoresFiltros.filtro_id;
+            fFltNom.value  = transceptoresFiltros.nombre;
+            fFltHost.value = transceptoresFiltros.host;
+            fFltLim.value  = transceptoresFiltros.limit;
+            fFltSort.value = transceptoresFiltros.sort;
+            fFltDir.value  = transceptoresFiltros.dir;
+            sincronizarChips(fChipsPre, transceptoresFiltros.predeterminado);
+            sincronizarChips(fChipsHab, transceptoresFiltros.habilitado);
+        }
+        function abrirModalFiltros() {
+            transceptoresFiltrosSnapshot = Object.assign({}, transceptoresFiltros);
+            sincronizarFiltros();
+            filtrosModal.classList.add('open');
+        }
+        function cerrarModalFiltros() { filtrosModal.classList.remove('open'); }
+        function cancelarFiltros() {
+            if (transceptoresFiltrosSnapshot) {
+                Object.keys(transceptoresFiltrosSnapshot).forEach(function (k) {
+                    transceptoresFiltros[k] = transceptoresFiltrosSnapshot[k];
+                });
+                transceptoresFiltrosSnapshot = null;
+                recargarTransceptoresLista();
+            }
+            cerrarModalFiltros();
+        }
+        function limpiarFiltros() {
+            Object.assign(transceptoresFiltros, transceptoresFiltrosDefault);
+            sincronizarFiltros();
+            recargarTransceptoresLista();
+        }
+
+        document.getElementById('txFiltros').addEventListener('click', abrirModalFiltros);
+        filtrosModal.addEventListener('click', function (ev) {
+            if (ev.target === filtrosModal) { cancelarFiltros(); return; }
+            var b = ev.target.closest('button[data-act]');
+            if (!b) return;
+            if (b.dataset.act === 'cerrar')  cancelarFiltros();
+            if (b.dataset.act === 'limpiar') limpiarFiltros();
+            if (b.dataset.act === 'aplicar') { transceptoresFiltrosSnapshot = null; cerrarModalFiltros(); }
+        });
+
+        function liveApply(field, valueGetter) {
+            return function () {
+                transceptoresFiltros[field] = valueGetter();
+                recargarTransceptoresLista();
+            };
+        }
+        fFltId.addEventListener('input',    liveApply('filtro_id', function () { return fFltId.value.trim(); }));
+        fFltNom.addEventListener('input',   liveApply('nombre',    function () { return fFltNom.value.trim(); }));
+        fFltHost.addEventListener('input',  liveApply('host',      function () { return fFltHost.value.trim(); }));
+        fFltLim.addEventListener('change',  liveApply('limit',     function () { return parseInt(fFltLim.value, 10) || 100; }));
+        fFltSort.addEventListener('change', liveApply('sort',      function () { return fFltSort.value || 'id'; }));
+        fFltDir.addEventListener('change',  liveApply('dir',       function () { return fFltDir.value  || 'desc'; }));
+        fChipsPre.forEach(function (chip) {
+            chip.addEventListener('click', function () {
+                transceptoresFiltros.predeterminado = chip.dataset.value;
+                sincronizarChips(fChipsPre, chip.dataset.value);
+                recargarTransceptoresLista();
+            });
+        });
+        fChipsHab.forEach(function (chip) {
+            chip.addEventListener('click', function () {
+                transceptoresFiltros.habilitado = chip.dataset.value;
+                sincronizarChips(fChipsHab, chip.dataset.value);
+                recargarTransceptoresLista();
+            });
+        });
+
+        // --- Menú contextual de fila ---------------------------------------
+        function cerrarCtxMenu() {
+            ctxMenu.classList.remove('open');
+            ctxId = null;
+        }
+        function actualizarCtxMenu(tr) {
+            var esPredet = tr && parseInt(tr.dataset.predet, 10) === 1;
+            var btn      = ctxMenu.querySelector('button[data-action="toggle-predet"]');
+            var icon     = btn ? btn.querySelector('i') : null;
+            if (icon) icon.className = esPredet ? 'fa-solid fa-star' : 'fa-regular fa-star';
+        }
+        ctxMenu.addEventListener('click', function (ev) {
+            var b = ev.target.closest('button[data-action]');
+            if (!b || ctxId == null) return;
+            var id = ctxId;
+            cerrarCtxMenu();
+            if (b.dataset.action === 'consultar')          abrirConsulta(id);
+            else if (b.dataset.action === 'toggle-predet') togglePredeterminado(id);
+            else if (b.dataset.action === 'monitor')       abrirMonitor(id);
+            else if (b.dataset.action === 'administrar')   abrirAdministracion(id);
+            else if (b.dataset.action === 'editar')        abrirEdicion(id);
+            else if (b.dataset.action === 'eliminar')      pedirEliminar(id);
+        });
+        conectarCierreCtxMenu(ctxMenu, cerrarCtxMenu);
+
+        // --- Filas: clic = Consultar, click derecho = ctx menu -------------
+        tbody.addEventListener('click', function (ev) {
+            var tr = ev.target.closest('tr[data-id]');
+            if (!tr) return;
+            var id = parseInt(tr.dataset.id, 10);
+            var btn = ev.target.closest('button[data-act="menu"]');
+            if (btn) {
+                ev.stopPropagation();
+                var rect = btn.getBoundingClientRect();
+                actualizarCtxMenu(tr);
+                abrirCtxMenuFlotante(ctxMenu, rect.right - 220, rect.bottom + 4);
+                ctxId = id;
+                return;
+            }
+            if (ev.target.closest('a,input,select,button')) return;
+            abrirConsulta(id);
+        });
+        tbody.addEventListener('contextmenu', function (ev) {
+            var tr = ev.target.closest('tr[data-id]');
+            if (!tr) return;
+            ev.preventDefault();
+            var id = parseInt(tr.dataset.id, 10);
+            actualizarCtxMenu(tr);
+            abrirCtxMenuFlotante(ctxMenu, ev.clientX, ev.clientY);
+            ctxId = id;
+        });
+
+        // --- Modal Consultar ----------------------------------------------
+        consultarModal.addEventListener('click', function (ev) {
+            if (ev.target === consultarModal || ev.target.closest('[data-act="close"]')) {
+                consultarModal.classList.remove('open');
+            }
+        });
+        consultarEditar.addEventListener('click', function () {
+            if (consultarIdActual == null) return;
+            consultarModal.classList.remove('open');
+            abrirEdicion(consultarIdActual);
+        });
+
+        async function abrirConsulta(id) {
+            consultarIdActual = id;
+            consultarSub.innerHTML  = '<code>#' + id + '</code>';
+            consultarBody.innerHTML = '<div style="display:flex;justify-content:center;padding:24px"><div class="spin"></div></div>';
+            consultarModal.classList.add('open');
+
+            var t;
+            try {
+                t = transceptoresRegistroCache[id] ||
+                    (transceptoresRegistroCache[id] = await api('/api/transceptores.php?id=' + id));
+            } catch (err) {
+                consultarBody.innerHTML = '<div class="alert alert-error">' + e(err.message) + '</div>';
+                return;
+            }
+
+            var predetBadge = String(t.predeterminado || '').toUpperCase() === 'S'
+                ? '<span class="badge badge-success">Sí</span>'
+                : '<span class="badge badge-muted">No</span>';
+            var habilBadge = String(t.habilitado || '').toUpperCase() === 'S'
+                ? '<span class="badge badge-success">Sí</span>'
+                : '<span class="badge badge-danger">No</span>';
+
+            consultarSub.innerHTML  = '<code>#' + t.id + '</code>' + (t.nombre ? ' · ' + e(t.nombre) : '');
+            consultarBody.innerHTML =
+                abmRow    ('Código',                    '<code>#' + t.id + '</code>') +
+                abmRowTxt ('Nombre',                     t.nombre, 'Sin nombre') +
+                abmRowTxt ('Host',                       t.host,   'Sin host', true) +
+                abmRowNum ('Puerto administración',      t.administracion_puerto,   'Sin puerto') +
+                abmRowTxt ('Usuario administración',     t.administracion_usuario,  'Sin usuario') +
+                abmRowTxt ('Contraseña administración',  t.administracion_contrasena ? '••••••••' : null, 'Sin contraseña') +
+                abmRowNum ('Puerto transmisión',         t.transmision_puerto,      'Sin puerto') +
+                abmRowTxt ('Usuario transmisión',        t.transmision_usuario,     'Sin usuario') +
+                abmRowTxt ('Contraseña transmisión',     t.transmision_contrasena ? '••••••••' : null, 'Sin contraseña') +
+                abmRow    ('Topic de entrada',           t.transmision_entrada ? '<code>' + e(t.transmision_entrada) + '</code>' : '<span class="muted">Sin topic</span>') +
+                abmRow    ('Topic de salida',            t.transmision_salida  ? '<code>' + e(t.transmision_salida)  + '</code>' : '<span class="muted">Sin topic</span>') +
+                abmRow    ('Predeterminado',             predetBadge) +
+                abmRow    ('Habilitado',                 habilBadge);
+        }
+
+        // --- Toggle predeterminado desde el menú contextual ---------------
+        async function togglePredeterminado(id) {
+            try {
+                var t = transceptoresRegistroCache[id] ||
+                        (transceptoresRegistroCache[id] = await api('/api/transceptores.php?id=' + id));
+                var yaPredet = String(t.predeterminado || '').toUpperCase() === 'S';
+                var payload = {
+                    nombre:                    t.nombre,
+                    host:                      t.host,
+                    administracion_puerto:     t.administracion_puerto,
+                    administracion_usuario:    t.administracion_usuario,
+                    administracion_contrasena: t.administracion_contrasena,
+                    transmision_puerto:        t.transmision_puerto,
+                    transmision_usuario:       t.transmision_usuario,
+                    transmision_contrasena:    t.transmision_contrasena,
+                    transmision_entrada:       t.transmision_entrada,
+                    transmision_salida:        t.transmision_salida,
+                    predeterminado:            yaPredet ? 0 : 1,
+                    habilitado:                String(t.habilitado || '').toUpperCase() === 'S' ? 1 : 0
+                };
+                await api('/api/transceptores.php?id=' + id, { method: 'PUT', body: payload });
+                toast(yaPredet ? 'Se quitó como predeterminado.' : 'Marcado como predeterminado.');
+                recargarTransceptoresLista();
+            } catch (err) {
+                toast(err.message, true);
+            }
+        }
+
+        // --- Abrir consola de administración del broker -------------------
+        async function abrirAdministracion(id) {
+            var t;
+            try {
+                t = transceptoresRegistroCache[id] ||
+                    (transceptoresRegistroCache[id] = await api('/api/transceptores.php?id=' + id));
+            } catch (err) {
+                toast(err.message, true);
+                return;
+            }
+            if (!t.host) {
+                toast('El transceptor no tiene host configurado.', true);
+                return;
+            }
+            if (t.administracion_puerto == null || t.administracion_puerto === '') {
+                toast('El transceptor no tiene puerto de administración configurado.', true);
+                return;
+            }
+            var url = 'http://' + t.host + ':' + t.administracion_puerto;
+            window.open(url, '_blank', 'noopener,noreferrer');
+        }
+
+        // --- Monitor MQTT en vivo (SSE + terminal en modal) ---------------
+        // Abre un modal estilo consola y engancha un EventSource contra
+        // /api/transceptores_monitor.php?id=N. Cada mensaje MQTT llega como
+        // event: mqtt / data: {ts, topic, payload} y se pinta como una línea
+        // más al pie del log. También se muestran mensajes de info/error
+        // emitidos por el backend (conexión, suscripción, cortes).
+        async function abrirMonitor(id) {
+            var t;
+            try {
+                t = transceptoresRegistroCache[id] ||
+                    (transceptoresRegistroCache[id] = await api('/api/transceptores.php?id=' + id));
+            } catch (err) {
+                toast(err.message, true);
+                return;
+            }
+            if (!t.transmision_entrada) {
+                toast('El transceptor no tiene topic de entrada configurado.', true);
+                return;
+            }
+
+            var MAX_LINES = 500;
+            var titulo = 'Monitor · ' + (t.nombre || ('#' + t.id));
+
+            var backdrop = document.createElement('div');
+            backdrop.className = 'modal-backdrop';
+            backdrop.innerHTML =
+                '<div class="modal signals-monitor-modal" role="dialog" aria-modal="true" aria-labelledby="tx-monitor-title">' +
+                    '<div class="modal-header">' +
+                        '<div class="modal-title" id="tx-monitor-title">' +
+                            e(titulo) +
+                            '<span class="dash-live-status" id="tx-monitor-status">' +
+                                '<span class="live-dot"></span> Conectando…' +
+                            '</span>' +
+                        '</div>' +
+                        '<div class="signals-monitor-controls">' +
+                            '<button type="button" class="btn-icon-sm" id="tx-monitor-clear" title="Limpiar" aria-label="Limpiar log">' +
+                                '<i class="fa-solid fa-eraser"></i>' +
+                            '</button>' +
+                            '<button type="button" class="btn-icon-sm" data-act="close" aria-label="Cerrar">&times;</button>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="modal-body">' +
+                        '<div class="signals-monitor-console" id="tx-monitor-console">' +
+                            '<div class="signals-monitor-empty">$ esperando mensajes en <code>' + e(t.transmision_entrada) + '</code>…<span class="signals-monitor-caret"></span></div>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="modal-footer">' +
+                        '<span class="signals-monitor-footer-info">' +
+                            '<i class="fa-solid fa-terminal"></i> ' +
+                            '<strong id="tx-monitor-count">0</strong> mensaje(s) · topic <code>' + e(t.transmision_entrada) + '</code>' +
+                        '</span>' +
+                        '<button class="btn btn-ghost" data-act="close" type="button">Cerrar</button>' +
+                    '</div>' +
+                '</div>';
+            document.body.appendChild(backdrop);
+            requestAnimationFrame(function () { backdrop.classList.add('open'); });
+
+            var modal      = backdrop.querySelector('.modal');
+            var consoleEl  = backdrop.querySelector('#tx-monitor-console');
+            var statusEl   = backdrop.querySelector('#tx-monitor-status');
+            var countLabel = backdrop.querySelector('#tx-monitor-count');
+            var btnClear   = backdrop.querySelector('#tx-monitor-clear');
+
+            var mensajes = 0;
+            var es       = null;
+
+            function setStatus(html, extraClass) {
+                statusEl.innerHTML = html;
+                modal.classList.remove('live-paused');
+                if (extraClass) modal.classList.add(extraClass);
+            }
+
+            function scrollToBottom() { consoleEl.scrollTop = consoleEl.scrollHeight; }
+
+            function trimOverflow() {
+                var lines = consoleEl.querySelectorAll('.log-line');
+                var overflow = lines.length - MAX_LINES;
+                for (var i = 0; i < overflow; i++) lines[i].remove();
+            }
+
+            function appendLine(html) {
+                var empty = consoleEl.querySelector('.signals-monitor-empty');
+                if (empty) empty.remove();
+                consoleEl.insertAdjacentHTML('beforeend', html);
+                trimOverflow();
+                scrollToBottom();
+            }
+
+            function lineaMqtt(msg) {
+                mensajes++;
+                countLabel.textContent = String(mensajes);
+                return '<div class="log-line is-new">' +
+                    '<span class="log-ts">' + e(msg.ts || '') + '</span>' +
+                    '<span class="log-sep">│</span>' +
+                    '<span class="log-prop">' + e(msg.topic || '') + '</span>' +
+                    '<span class="log-sep">│</span>' +
+                    '<span class="log-msg">' + e(msg.payload != null ? String(msg.payload) : '') + '</span>' +
+                '</div>';
+            }
+
+            function lineaMeta(prefijo, msg, extraCls) {
+                var cls = 'log-line log-line-meta' + (extraCls ? ' ' + extraCls : '');
+                return '<div class="' + cls + '">' +
+                    '<span class="log-ts">' + e(msg.ts || '') + '</span>' +
+                    '<span class="log-sep">│</span>' +
+                    '<span class="log-arrow">' + e(prefijo) + '</span>' +
+                    '<span class="log-sep">│</span>' +
+                    '<span class="log-msg">' + e(msg.mensaje || '') + '</span>' +
+                '</div>';
+            }
+
+            btnClear.addEventListener('click', function () {
+                mensajes = 0;
+                countLabel.textContent = '0';
+                consoleEl.innerHTML =
+                    '<div class="signals-monitor-empty">$ log limpiado. Esperando mensajes…<span class="signals-monitor-caret"></span></div>';
+            });
+
+            function close() {
+                if (es) { try { es.close(); } catch (_) {} es = null; }
+                backdrop.classList.remove('open');
+                setTimeout(function () { backdrop.remove(); }, 200);
+            }
+            backdrop.addEventListener('click', function (ev) { if (ev.target === backdrop) close(); });
+            backdrop.querySelectorAll('[data-act="close"]').forEach(function (b) {
+                b.addEventListener('click', close);
+            });
+
+            // --- Enganchar SSE -------------------------------------------
+            es = new EventSource('/api/transceptores_monitor.php?id=' + encodeURIComponent(id));
+
+            es.addEventListener('open', function () {
+                setStatus('<span class="live-dot"></span> En vivo');
+            });
+
+            es.addEventListener('info', function (ev) {
+                try {
+                    var msg = JSON.parse(ev.data);
+                    appendLine(lineaMeta('INFO', msg));
+                } catch (_) {}
+            });
+
+            es.addEventListener('mqtt', function (ev) {
+                try {
+                    var msg = JSON.parse(ev.data);
+                    appendLine(lineaMqtt(msg));
+                } catch (_) {}
+            });
+
+            es.addEventListener('error', function (ev) {
+                // Los "error" del servidor vienen con ev.data (custom event).
+                // Los errores de red del EventSource vienen SIN ev.data.
+                if (ev.data) {
+                    try {
+                        var msg = JSON.parse(ev.data);
+                        appendLine(lineaMeta('ERR ', msg, 'log-error'));
+                    } catch (_) {}
+                    return;
+                }
+                if (es && es.readyState === EventSource.CLOSED) {
+                    setStatus('<span class="live-dot"></span> Desconectado', 'live-paused');
+                    appendLine(lineaMeta('ERR ', { ts: '', mensaje: 'Conexión SSE cerrada por el navegador.' }, 'log-error'));
+                }
+            });
+
+            es.addEventListener('end', function (ev) {
+                setStatus('<span class="live-dot"></span> Finalizado', 'live-paused');
+                appendLine(lineaMeta('END ', { ts: '', mensaje: 'Stream finalizado (' + (ev.data || 'ok') + ').' }));
+                if (es) { try { es.close(); } catch (_) {} es = null; }
+            });
+        }
+
+        // --- Alta / edición ------------------------------------------------
+        function setToggleLabels() {
+            predetLabel.textContent = fPredet.checked     ? 'Sí' : 'No';
+            habLabel.textContent    = fHabilitado.checked ? 'Sí' : 'No';
+        }
+        fPredet.addEventListener('change',     setToggleLabels);
+        fHabilitado.addEventListener('change', setToggleLabels);
+
+        function resetForm() {
+            form.reset();
+            fId.value = '';
+            fPredet.checked     = false;
+            fHabilitado.checked = true;
+            setToggleLabels();
+        }
+        function openModal()  { modal.classList.add('open'); }
+        function closeModal() {
+            modal.classList.remove('open');
+            modalError.style.display = 'none';
+            modalError.textContent = '';
+        }
+        function showFormError(msg) {
+            modalError.textContent = msg;
+            modalError.style.display = '';
+        }
+
+        modal.addEventListener('click', function (ev) {
+            if (ev.target === modal || ev.target.closest('[data-act="close"]')) closeModal();
+        });
+
+        document.getElementById('txNuevo').addEventListener('click', function () {
+            modoEdicion = false;
+            resetForm();
+            modalTitulo.textContent = 'Nuevo transceptor';
+            modalSub.textContent    = '';
+            openModal();
+            document.getElementById('tx-nombre').focus();
+        });
+
+        async function abrirEdicion(id) {
+            try {
+                var t = await api('/api/transceptores.php?id=' + id);
+                transceptoresRegistroCache[id] = t;
+                modoEdicion = true;
+                resetForm();
+                fId.value = t.id;
+                modalTitulo.textContent = 'Editar transceptor';
+                modalSub.textContent    = '#' + t.id + (t.nombre ? ' · ' + t.nombre : '');
+                document.getElementById('tx-nombre').value         = t.nombre || '';
+                document.getElementById('tx-host').value           = t.host   || '';
+                document.getElementById('tx-adm-puerto').value     = t.administracion_puerto != null ? t.administracion_puerto : '';
+                document.getElementById('tx-adm-usuario').value    = t.administracion_usuario    || '';
+                document.getElementById('tx-adm-contrasena').value = t.administracion_contrasena || '';
+                document.getElementById('tx-trn-puerto').value     = t.transmision_puerto != null ? t.transmision_puerto : '';
+                document.getElementById('tx-trn-usuario').value    = t.transmision_usuario    || '';
+                document.getElementById('tx-trn-contrasena').value = t.transmision_contrasena || '';
+                document.getElementById('tx-trn-entrada').value    = t.transmision_entrada    || '';
+                document.getElementById('tx-trn-salida').value     = t.transmision_salida     || '';
+                fPredet.checked     = String(t.predeterminado || '').toUpperCase() === 'S';
+                fHabilitado.checked = String(t.habilitado     || '').toUpperCase() === 'S';
+                setToggleLabels();
+                openModal();
+                document.getElementById('tx-nombre').focus();
+            } catch (err) {
+                toast(err.message, true);
+            }
+        }
+
+        function pedirEliminar(id) {
+            var tr = tbody.querySelector('tr[data-id="' + id + '"]');
+            var nombre = tr ? ((tr.querySelector('.td-nombre') || {}).textContent || '').trim() : '';
+            confirmMsg.textContent = nombre
+                ? '¿Eliminar el transceptor "' + nombre + '"? Esta acción no se puede deshacer.'
+                : '¿Eliminar el transceptor #' + id + '? Esta acción no se puede deshacer.';
+            pendingDeleteId = id;
+            confirmBox.classList.add('open');
+        }
+        confirmBox.addEventListener('click', function (ev) {
+            if (ev.target === confirmBox || ev.target.closest('[data-act="cancel"]')) {
+                confirmBox.classList.remove('open');
+                pendingDeleteId = null;
+            }
+        });
+        btnDelete.addEventListener('click', async function () {
+            if (!pendingDeleteId) return;
+            btnDelete.disabled = true;
+            try {
+                await api('/api/transceptores.php?id=' + pendingDeleteId, { method: 'DELETE' });
+                toast('Transceptor eliminado.');
+                recargarTransceptoresLista();
+            } catch (err) {
+                toast(err.message, true);
+            } finally {
+                btnDelete.disabled = false;
+                confirmBox.classList.remove('open');
+                pendingDeleteId = null;
+            }
+        });
+
+        form.addEventListener('submit', async function (ev) {
+            ev.preventDefault();
+            modalError.style.display = 'none';
+
+            var admPuerto = document.getElementById('tx-adm-puerto').value;
+            var trnPuerto = document.getElementById('tx-trn-puerto').value;
+            var payload = {
+                nombre:                    document.getElementById('tx-nombre').value.trim(),
+                host:                      document.getElementById('tx-host').value.trim(),
+                administracion_puerto:     admPuerto === '' ? null : admPuerto,
+                administracion_usuario:    document.getElementById('tx-adm-usuario').value.trim(),
+                administracion_contrasena: document.getElementById('tx-adm-contrasena').value,
+                transmision_puerto:        trnPuerto === '' ? null : trnPuerto,
+                transmision_usuario:       document.getElementById('tx-trn-usuario').value.trim(),
+                transmision_contrasena:    document.getElementById('tx-trn-contrasena').value,
+                transmision_entrada:       document.getElementById('tx-trn-entrada').value.trim(),
+                transmision_salida:        document.getElementById('tx-trn-salida').value.trim(),
+                predeterminado:            fPredet.checked      ? 1 : 0,
+                habilitado:                fHabilitado.checked  ? 1 : 0
+            };
+
+            btnGuardar.disabled = true;
+            try {
+                if (modoEdicion) {
+                    await api('/api/transceptores.php?id=' + encodeURIComponent(fId.value), {
+                        method: 'PUT',
+                        body:   payload
+                    });
+                    toast('Transceptor actualizado.');
+                } else {
+                    await api('/api/transceptores.php', {
+                        method: 'POST',
+                        body:   payload
+                    });
+                    toast('Transceptor creado.');
+                }
+                closeModal();
+                recargarTransceptoresLista();
+            } catch (err) {
+                showFormError(err.message);
+            } finally {
+                btnGuardar.disabled = false;
+            }
+        });
+
+        applyClientFilter();
     }
 
     // -------- Vista: Herramientas -----------------------------------------
@@ -8483,6 +9859,11 @@
             // alfabéticamente por título. Al agregar una nueva, insertala
             // en la posición correcta — no la pegues al final.
             '<div class="tile-grid">' +
+                '<button type="button" class="tile-card" id="cfgTileEstados">' +
+                    '<span class="tile-icon">🎚️</span>' +
+                    '<span class="tile-title">Editor de estados</span>' +
+                    '<span class="tile-desc">Catálogo de valores (<code>campo</code> / <code>valor</code> / <code>texto</code>) para columnas de estado de las distintas tablas.</span>' +
+                '</button>' +
                 '<button type="button" class="tile-card" id="cfgTileParametros">' +
                     '<span class="tile-icon">🧩</span>' +
                     '<span class="tile-title">Editor de parámetros</span>' +
@@ -8520,6 +9901,10 @@
                 '</button>' +
             '</div>' +
 
+            modalEstadosListaHtml() +
+            modalEstadoFormHtml() +
+            ctxMenuEstadosHtml() +
+            confirmEstadoHtml() +
             modalParametrosListaHtml() +
             modalParametroFormHtml() +
             ctxMenuParametrosHtml() +
@@ -8545,12 +9930,570 @@
             confirmTareasHtml();
 
         wireConfigView();
+        wireEditorEstadosView();
         wireExploradorS3View();
         wireFirmwareView();
         wireVisorSucesosView();
         wireMigradorView();
         wireExploradorDBView();
         wireTareasView();
+    }
+
+    // ---------- Editor de estados (skill: crear_editor_de_estados) ----------
+    //
+    // Cada fila de la tabla `estados` se identifica por el par (campo, valor)
+    // — que en vigicom es la PRIMARY KEY compuesta original del catálogo,
+    // no un id sintético. Los data-attrs de las filas y los parámetros de
+    // la URL del endpoint (`campo_key` / `valor_key`) reflejan eso.
+
+    var estadosCache          = [];   // [{campo, valor, texto, orden}, ...]
+    var estadosCampos         = [];   // distintos `campo` (combo + datalist)
+    var estadosFiltroQ        = '';
+    var estadosFiltroCampo    = '';
+    var estadosCtxCampo       = null;
+    var estadosCtxValor       = null;
+    var _estadosSearchTimer   = null;
+    var estadosPendingDelete  = null; // {campo, valor}
+
+    function modalEstadosListaHtml() {
+        return '<div class="modal-backdrop" id="estadosBackdrop">' +
+            '<div class="modal" style="max-width:960px">' +
+                '<div class="modal-header">' +
+                    '<div class="modal-title" style="display:flex;align-items:center;gap:8px">' +
+                        '<span style="font-size:1.2rem">🎚️</span>' +
+                        '<span>Editor de estados</span>' +
+                    '</div>' +
+                    '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+                '</div>' +
+                '<div class="modal-body" style="gap:12px">' +
+                    '<div class="toolbar" style="margin-bottom:0">' +
+                        '<div class="toolbar-left" style="gap:8px;flex-wrap:wrap">' +
+                            '<div class="search-wrap">' +
+                                '<input class="search-input" type="search" id="estadosSearch" ' +
+                                    'placeholder="🔍 Buscar campo, texto, valor…">' +
+                                '<button class="search-clear" id="estadosSearchClear" type="button" style="display:none">&times;</button>' +
+                            '</div>' +
+                            '<select id="estadosCampoFiltro" style="min-width:220px">' +
+                                '<option value="">— Todos los campos —</option>' +
+                            '</select>' +
+                            '<button class="btn btn-ghost btn-sm" id="estadosBtnRefrescar" type="button" title="Refrescar">' +
+                                '<i class="fa-solid fa-rotate"></i>' +
+                            '</button>' +
+                        '</div>' +
+                        '<div class="toolbar-right">' +
+                            '<button class="btn btn-primary" id="estadosBtnNuevo" type="button">+ Nuevo estado</button>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="table-card">' +
+                        '<table>' +
+                            '<thead><tr>' +
+                                '<th style="width:260px">Campo</th>' +
+                                '<th style="width:120px">Valor</th>' +
+                                '<th>Texto</th>' +
+                                '<th style="width:80px;text-align:center">Orden</th>' +
+                                '<th style="width:60px;text-align:center">Acciones</th>' +
+                            '</tr></thead>' +
+                            '<tbody id="estadosTbody">' +
+                                '<tr><td colspan="5" style="text-align:center;padding:20px"><div class="spin"></div></td></tr>' +
+                            '</tbody>' +
+                        '</table>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="modal-footer">' +
+                    '<button type="button" class="btn btn-ghost" data-act="close">Cerrar</button>' +
+                '</div>' +
+            '</div>' +
+        '</div>';
+    }
+
+    function modalEstadoFormHtml() {
+        return '<div class="modal-backdrop" id="formEstadoBackdrop">' +
+            '<div class="modal" style="max-width:560px">' +
+                '<div class="modal-header">' +
+                    '<div class="modal-title" id="formEstadoTitulo" style="display:flex;align-items:center;gap:8px">' +
+                        '<span style="font-size:1.2rem">🎚️</span><span>Nuevo estado</span>' +
+                    '</div>' +
+                    '<button class="btn-icon-sm" data-act="close" type="button" aria-label="Cerrar">&times;</button>' +
+                '</div>' +
+                '<form id="formEstado" novalidate>' +
+                    '<input type="hidden" id="formEstadoOrigCampo" value="">' +
+                    '<input type="hidden" id="formEstadoOrigValor" value="">' +
+                    '<div class="modal-body">' +
+                        '<div class="form-group">' +
+                            '<label for="formEstadoCampo">Campo</label>' +
+                            '<input type="text" id="formEstadoCampo" ' +
+                                'placeholder="ej. alarma.estado" ' +
+                                'autocomplete="off" autocapitalize="none" spellcheck="false" ' +
+                                'maxlength="100" style="font-family:monospace" list="formEstadoCampoLista">' +
+                            '<datalist id="formEstadoCampoLista"></datalist>' +
+                            '<div class="field-error" id="formEstadoCampoError" style="display:none"></div>' +
+                        '</div>' +
+                        '<div class="form-row">' +
+                            '<div class="form-group">' +
+                                '<label for="formEstadoValor">Valor</label>' +
+                                '<input type="text" id="formEstadoValor" ' +
+                                    'placeholder="ej. A, 1, B…" ' +
+                                    'autocomplete="off" autocapitalize="none" spellcheck="false" ' +
+                                    'maxlength="50" style="font-family:monospace">' +
+                                '<div class="field-error" id="formEstadoValorError" style="display:none"></div>' +
+                            '</div>' +
+                            '<div class="form-group">' +
+                                '<label for="formEstadoTexto">Texto</label>' +
+                                '<input type="text" id="formEstadoTexto" ' +
+                                    'placeholder="ej. Activo, Pendiente…" maxlength="255">' +
+                                '<div class="field-error" id="formEstadoTextoError" style="display:none"></div>' +
+                            '</div>' +
+                        '</div>' +
+                        '<div class="form-group">' +
+                            '<label for="formEstadoOrden">' +
+                                'Orden <span style="font-weight:400;color:var(--muted)">— opcional</span>' +
+                            '</label>' +
+                            '<input type="number" id="formEstadoOrden" placeholder="0" step="1">' +
+                            '<div class="field-error" id="formEstadoOrdenError" style="display:none"></div>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="modal-footer">' +
+                        '<button type="button" class="btn btn-ghost" data-act="close">Cancelar</button>' +
+                        '<button type="submit" class="btn btn-primary" id="btnGuardarEstado">Guardar</button>' +
+                    '</div>' +
+                '</form>' +
+            '</div>' +
+        '</div>';
+    }
+
+    function ctxMenuEstadosHtml() {
+        return '<div id="estadosCtxMenu" class="ctx-menu" role="menu">' +
+            '<button type="button" data-action="editar" role="menuitem">' +
+                '<i class="fa-solid fa-pen"></i><span>Editar</span></button>' +
+            '<button type="button" data-action="copiar-campo" role="menuitem">' +
+                '<i class="fa-solid fa-copy"></i><span>Copiar campo</span></button>' +
+            '<button type="button" data-action="copiar-valor" role="menuitem">' +
+                '<i class="fa-solid fa-copy"></i><span>Copiar valor</span></button>' +
+            '<div class="ctx-menu-sep"></div>' +
+            '<button type="button" data-action="eliminar" class="ctx-menu-danger" role="menuitem">' +
+                '<i class="fa-solid fa-trash"></i><span>Eliminar</span></button>' +
+        '</div>';
+    }
+
+    function confirmEstadoHtml() {
+        return '<div class="confirm-backdrop" id="estadosConfirm"><div class="confirm-box">' +
+            '<div class="confirm-title">Eliminar estado</div>' +
+            '<div class="confirm-msg" id="estadosConfirmMsg">Esta acción no se puede deshacer.</div>' +
+            '<div class="confirm-actions">' +
+                '<button class="btn btn-ghost"  data-act="cancel" type="button">Cancelar</button>' +
+                '<button class="btn btn-danger" id="estadosConfirmBtn" type="button">Eliminar</button>' +
+            '</div>' +
+        '</div></div>';
+    }
+
+    // ---- Listado ----
+
+    function abrirEstados() {
+        var bd = document.getElementById('estadosBackdrop');
+        if (!bd) return;
+        estadosFiltroQ     = '';
+        estadosFiltroCampo = '';
+        var s = document.getElementById('estadosSearch');
+        if (s) s.value = '';
+        var sc = document.getElementById('estadosSearchClear');
+        if (sc) sc.style.display = 'none';
+        var sel = document.getElementById('estadosCampoFiltro');
+        if (sel) sel.value = '';
+        bd.classList.add('open');
+        cargarEstados();
+    }
+
+    function cerrarEstados() {
+        var bd = document.getElementById('estadosBackdrop');
+        if (bd) bd.classList.remove('open');
+    }
+
+    function estadosOnSearch(v) {
+        estadosFiltroQ = v || '';
+        var sc = document.getElementById('estadosSearchClear');
+        if (sc) sc.style.display = estadosFiltroQ ? '' : 'none';
+        if (_estadosSearchTimer) clearTimeout(_estadosSearchTimer);
+        _estadosSearchTimer = setTimeout(cargarEstados, 250);
+    }
+
+    function estadosLimpiarBusqueda() {
+        var i = document.getElementById('estadosSearch');
+        if (i) i.value = '';
+        estadosFiltroQ = '';
+        var sc = document.getElementById('estadosSearchClear');
+        if (sc) sc.style.display = 'none';
+        cargarEstados();
+    }
+
+    async function cargarEstados() {
+        var tbody = document.getElementById('estadosTbody');
+        if (!tbody) return;
+        var sel = document.getElementById('estadosCampoFiltro');
+        estadosFiltroCampo = sel ? sel.value : '';
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px"><div class="spin"></div></td></tr>';
+        var qs = new URLSearchParams();
+        if (estadosFiltroQ)     qs.set('q', estadosFiltroQ);
+        if (estadosFiltroCampo) qs.set('campo', estadosFiltroCampo);
+        qs.set('limite', '500');
+        try {
+            var d = await api('/api/estados.php' + (qs.toString() ? ('?' + qs.toString()) : ''));
+            estadosCache  = d.items  || [];
+            estadosCampos = d.campos || [];
+            estadosRefrescarCombos();
+            renderEstados(estadosCache);
+        } catch (err) {
+            tbody.innerHTML = '<tr><td colspan="5" class="table-empty">✗ ' + e(err.message) + '</td></tr>';
+        }
+    }
+
+    function estadosRefrescarCombos() {
+        var sel = document.getElementById('estadosCampoFiltro');
+        if (sel) {
+            var actual = sel.value;
+            var html = '<option value="">— Todos los campos —</option>';
+            estadosCampos.forEach(function (c) {
+                html += '<option value="' + e(c) + '">' + e(c) + '</option>';
+            });
+            sel.innerHTML = html;
+            if (actual && estadosCampos.indexOf(actual) !== -1) sel.value = actual;
+        }
+        var dl = document.getElementById('formEstadoCampoLista');
+        if (dl) {
+            dl.innerHTML = estadosCampos.map(function (c) {
+                return '<option value="' + e(c) + '"></option>';
+            }).join('');
+        }
+    }
+
+    function renderEstados(rows) {
+        var tbody = document.getElementById('estadosTbody');
+        if (!tbody) return;
+        if (!rows || rows.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="table-empty">Sin estados para mostrar.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = rows.map(function (s) {
+            var valorCell = s.valor === ''
+                ? '<span style="color:var(--muted);font-style:italic">— vacío —</span>'
+                : e(s.valor);
+            var ordenCell = (s.orden === null || s.orden === undefined)
+                ? '<span style="color:var(--muted)">—</span>'
+                : String(s.orden);
+            return '<tr class="row-clickable" data-campo="' + e(s.campo) + '" data-valor="' + e(s.valor) + '" style="cursor:pointer">' +
+                '<td style="font-family:monospace;font-weight:600">' + e(s.campo || '') + '</td>' +
+                '<td style="font-family:monospace">' + valorCell + '</td>' +
+                '<td>' + e(s.texto || '') + '</td>' +
+                '<td style="text-align:center;color:var(--muted);font-family:monospace">' + ordenCell + '</td>' +
+                '<td style="text-align:center">' +
+                    '<div class="actions" style="justify-content:center">' +
+                        '<button class="btn-icon-sm" data-menu-estado="1" ' +
+                            'onclick="event.stopPropagation()" title="Más acciones">' +
+                            '<i class="fa-solid fa-bars"></i></button>' +
+                    '</div>' +
+                '</td>' +
+            '</tr>';
+        }).join('');
+    }
+
+    // ---- Form ----
+
+    function limpiarErroresFormEstado() {
+        ['Campo', 'Valor', 'Texto', 'Orden'].forEach(function (f) {
+            var inp = document.getElementById('formEstado' + f);
+            var err = document.getElementById('formEstado' + f + 'Error');
+            if (inp) inp.classList.remove('input-invalid');
+            if (err) { err.style.display = 'none'; err.textContent = ''; }
+        });
+    }
+
+    function mostrarErrorEstado(campo, msg) {
+        var inp = document.getElementById('formEstado' + campo);
+        var err = document.getElementById('formEstado' + campo + 'Error');
+        if (inp) inp.classList.add('input-invalid');
+        if (err) { err.textContent = msg; err.style.display = ''; }
+        if (inp) inp.focus();
+    }
+
+    function estadoBuscarEnCache(campo, valor) {
+        for (var i = 0; i < estadosCache.length; i++) {
+            var r = estadosCache[i];
+            if (r.campo === campo && r.valor === valor) return r;
+        }
+        return null;
+    }
+
+    function abrirNuevoEstado() {
+        limpiarErroresFormEstado();
+        document.getElementById('formEstadoOrigCampo').value = '';
+        document.getElementById('formEstadoOrigValor').value = '';
+        // Pre-llenar `campo` si hay un filtro activo: caso típico
+        // "agregar otro valor a este mismo campo".
+        var campoInicial = estadosFiltroCampo || '';
+        document.getElementById('formEstadoCampo').value = campoInicial;
+        document.getElementById('formEstadoValor').value = '';
+        document.getElementById('formEstadoTexto').value = '';
+        document.getElementById('formEstadoOrden').value = '';
+        var tit = document.getElementById('formEstadoTitulo');
+        if (tit) tit.innerHTML = '<span style="font-size:1.2rem">🎚️</span><span>Nuevo estado</span>';
+        document.getElementById('formEstadoBackdrop').classList.add('open');
+        setTimeout(function () {
+            var focoId = campoInicial ? 'formEstadoValor' : 'formEstadoCampo';
+            var el = document.getElementById(focoId);
+            if (el) el.focus();
+        }, 50);
+    }
+
+    function abrirEditarEstado(campo, valor) {
+        var s = estadoBuscarEnCache(campo, valor);
+        if (!s) return;
+        limpiarErroresFormEstado();
+        document.getElementById('formEstadoOrigCampo').value = s.campo;
+        document.getElementById('formEstadoOrigValor').value = s.valor;
+        document.getElementById('formEstadoCampo').value = s.campo || '';
+        document.getElementById('formEstadoValor').value = s.valor || '';
+        document.getElementById('formEstadoTexto').value = s.texto || '';
+        document.getElementById('formEstadoOrden').value = (s.orden === null || s.orden === undefined) ? '' : String(s.orden);
+        var tit = document.getElementById('formEstadoTitulo');
+        if (tit) tit.innerHTML = '<span style="font-size:1.2rem">🎚️</span><span>Editar estado <span style="color:var(--muted);font-weight:400;font-family:monospace">' + e(s.campo) + ' = ' + e(s.valor || '∅') + '</span></span>';
+        document.getElementById('formEstadoBackdrop').classList.add('open');
+        setTimeout(function () { document.getElementById('formEstadoTexto').focus(); }, 50);
+    }
+
+    async function guardarEstado(ev) {
+        if (ev) ev.preventDefault();
+        limpiarErroresFormEstado();
+        var origCampo = document.getElementById('formEstadoOrigCampo').value;
+        var origValor = document.getElementById('formEstadoOrigValor').value;
+        var campo     = document.getElementById('formEstadoCampo').value.trim();
+        var valor     = document.getElementById('formEstadoValor').value;
+        var texto     = document.getElementById('formEstadoTexto').value.trim();
+        var ordenRaw  = document.getElementById('formEstadoOrden').value;
+
+        if (!campo)                                       { mostrarErrorEstado('Campo', 'El campo es obligatorio.'); return; }
+        if (!/^[A-Za-z0-9_.\-]+$/.test(campo))            { mostrarErrorEstado('Campo', 'Sólo letras, números, punto, guión y guión bajo (ej. tabla.columna).'); return; }
+        if (campo.length > 100)                           { mostrarErrorEstado('Campo', 'Máximo 100 caracteres.'); return; }
+        if (!texto)                                       { mostrarErrorEstado('Texto', 'El texto es obligatorio.'); return; }
+        if (texto.length > 255)                           { mostrarErrorEstado('Texto', 'Máximo 255 caracteres.'); return; }
+        if (valor.length > 50)                            { mostrarErrorEstado('Valor', 'Máximo 50 caracteres.'); return; }
+        if (ordenRaw !== '' && !/^-?\d+$/.test(ordenRaw)) { mostrarErrorEstado('Orden', 'Debe ser un número entero.'); return; }
+
+        var btn = document.getElementById('btnGuardarEstado');
+        if (btn) btn.disabled = true;
+        try {
+            var payload = { campo: campo, valor: valor, texto: texto, orden: ordenRaw === '' ? null : parseInt(ordenRaw, 10) };
+            if (origCampo !== '') {
+                var qs = 'campo_key=' + encodeURIComponent(origCampo) + '&valor_key=' + encodeURIComponent(origValor);
+                await api('/api/estados.php?' + qs, { method: 'PUT', body: payload });
+                toast('Estado actualizado.');
+            } else {
+                await api('/api/estados.php', { method: 'POST', body: payload });
+                toast('Estado creado.');
+            }
+            document.getElementById('formEstadoBackdrop').classList.remove('open');
+            await cargarEstados();
+        } catch (err) {
+            var msg = (err && err.message) ? err.message : 'Error al guardar.';
+            if (/ya existe/i.test(msg))      mostrarErrorEstado('Valor', msg);
+            else if (/campo/i.test(msg))     mostrarErrorEstado('Campo', msg);
+            else if (/texto/i.test(msg))     mostrarErrorEstado('Texto', msg);
+            else                             toast(msg, { error: true });
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    function eliminarEstado(campo, valor) {
+        var s = estadoBuscarEnCache(campo, valor);
+        if (!s) return;
+        var msg = document.getElementById('estadosConfirmMsg');
+        var vMostrar = s.valor === '' ? '∅' : s.valor;
+        if (msg) msg.innerHTML =
+            'Vas a eliminar el estado <strong style="font-family:monospace">' +
+            e(s.campo) + ' = ' + e(vMostrar) +
+            '</strong> (' + e(s.texto || '') + '). Esta acción no se puede deshacer.';
+        estadosPendingDelete = { campo: s.campo, valor: s.valor };
+        var box = document.getElementById('estadosConfirm');
+        if (box) box.classList.add('open');
+    }
+
+    async function confirmarEliminarEstado() {
+        var pend = estadosPendingDelete;
+        if (!pend) return;
+        var btn = document.getElementById('estadosConfirmBtn');
+        if (btn) btn.disabled = true;
+        try {
+            var qs = 'campo_key=' + encodeURIComponent(pend.campo) + '&valor_key=' + encodeURIComponent(pend.valor);
+            await api('/api/estados.php?' + qs, { method: 'DELETE' });
+            toast('Estado eliminado.');
+            document.getElementById('estadosConfirm').classList.remove('open');
+            estadosPendingDelete = null;
+            await cargarEstados();
+        } catch (err) {
+            toast(err.message || 'Error al eliminar.', { error: true });
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    // ---- Ctx-menu estados ----
+
+    function abrirMenuContextoEstados(ev, campo, valor) {
+        var m = document.getElementById('estadosCtxMenu');
+        if (!m) return;
+        estadosCtxCampo = campo;
+        estadosCtxValor = valor;
+        var x, y;
+        if (ev && typeof ev.clientX === 'number' && ev.clientX > 0) {
+            x = ev.clientX; y = ev.clientY;
+        } else if (ev && ev.currentTarget && ev.currentTarget.getBoundingClientRect) {
+            var r = ev.currentTarget.getBoundingClientRect();
+            x = r.left; y = r.bottom;
+        } else {
+            x = 100; y = 100;
+        }
+        m.style.left = x + 'px';
+        m.style.top  = y + 'px';
+        m.classList.add('open');
+        setTimeout(function () {
+            var rr = m.getBoundingClientRect();
+            if (rr.right  > window.innerWidth)  m.style.left = (window.innerWidth  - rr.width  - 8) + 'px';
+            if (rr.bottom > window.innerHeight) m.style.top  = (window.innerHeight - rr.height - 8) + 'px';
+        }, 0);
+    }
+
+    function cerrarMenuContextoEstados() {
+        var m = document.getElementById('estadosCtxMenu');
+        if (m) m.classList.remove('open');
+        estadosCtxCampo = null;
+        estadosCtxValor = null;
+    }
+
+    // ---- Wire ----
+
+    function wireEditorEstadosView() {
+        var tile = document.getElementById('cfgTileEstados');
+        if (tile) tile.addEventListener('click', abrirEstados);
+
+        var listBd = document.getElementById('estadosBackdrop');
+        if (listBd) {
+            listBd.addEventListener('click', function (ev) {
+                if (ev.target === listBd || ev.target.closest('[data-act="close"]')) cerrarEstados();
+            });
+        }
+
+        var s = document.getElementById('estadosSearch');
+        if (s) s.addEventListener('input', function () { estadosOnSearch(s.value); });
+        var sc = document.getElementById('estadosSearchClear');
+        if (sc) sc.addEventListener('click', estadosLimpiarBusqueda);
+        var sel = document.getElementById('estadosCampoFiltro');
+        if (sel) sel.addEventListener('change', cargarEstados);
+        var btnRef = document.getElementById('estadosBtnRefrescar');
+        if (btnRef) btnRef.addEventListener('click', cargarEstados);
+        var btnNue = document.getElementById('estadosBtnNuevo');
+        if (btnNue) btnNue.addEventListener('click', abrirNuevoEstado);
+
+        var tbody = document.getElementById('estadosTbody');
+        if (tbody) {
+            tbody.addEventListener('click', function (ev) {
+                var tr = ev.target.closest('tr[data-campo]');
+                if (!tr) return;
+                var c = tr.getAttribute('data-campo');
+                var v = tr.getAttribute('data-valor');
+                var btn = ev.target.closest('[data-menu-estado]');
+                if (btn) {
+                    abrirMenuContextoEstados(ev, c, v);
+                    return;
+                }
+                abrirEditarEstado(c, v);
+            });
+            tbody.addEventListener('contextmenu', function (ev) {
+                var tr = ev.target.closest('tr[data-campo]');
+                if (!tr) return;
+                ev.preventDefault();
+                abrirMenuContextoEstados(
+                    ev,
+                    tr.getAttribute('data-campo'),
+                    tr.getAttribute('data-valor')
+                );
+            });
+        }
+
+        var ctx = document.getElementById('estadosCtxMenu');
+        if (ctx) {
+            ctx.addEventListener('click', function (ev) {
+                var btn = ev.target.closest('button[data-action]');
+                if (!btn) return;
+                var act = btn.getAttribute('data-action');
+                var c   = estadosCtxCampo;
+                var v   = estadosCtxValor;
+                cerrarMenuContextoEstados();
+                if (c === null) return;
+                if      (act === 'editar')       abrirEditarEstado(c, v);
+                else if (act === 'eliminar')     eliminarEstado(c, v);
+                else if (act === 'copiar-campo' || act === 'copiar-valor') {
+                    var s = estadoBuscarEnCache(c, v);
+                    if (!s || !navigator.clipboard) return;
+                    var txt = act === 'copiar-campo' ? (s.campo || '') : (s.valor || '');
+                    navigator.clipboard.writeText(txt).then(
+                        function () { toast((act === 'copiar-campo' ? 'Campo' : 'Valor') + ' copiado.'); },
+                        function () { toast('No se pudo copiar.', { error: true }); }
+                    );
+                }
+            });
+        }
+
+        var formBd = document.getElementById('formEstadoBackdrop');
+        if (formBd) {
+            formBd.addEventListener('click', function (ev) {
+                if (ev.target === formBd || ev.target.closest('[data-act="close"]')) formBd.classList.remove('open');
+            });
+        }
+        var form = document.getElementById('formEstado');
+        if (form) form.addEventListener('submit', guardarEstado);
+
+        var conf   = document.getElementById('estadosConfirm');
+        var btnDel = document.getElementById('estadosConfirmBtn');
+        if (conf) {
+            conf.addEventListener('click', function (ev) {
+                if (ev.target === conf || ev.target.closest('[data-act="cancel"]')) {
+                    conf.classList.remove('open');
+                    estadosPendingDelete = null;
+                }
+            });
+        }
+        if (btnDel) btnDel.addEventListener('click', confirmarEliminarEstado);
+
+        if (!wireEditorEstadosView._globalBound) {
+            wireEditorEstadosView._globalBound = true;
+            document.addEventListener('click', function (ev) {
+                var m = document.getElementById('estadosCtxMenu');
+                if (m && m.classList.contains('open') && !m.contains(ev.target)) {
+                    cerrarMenuContextoEstados();
+                }
+            }, true);
+            window.addEventListener('scroll', cerrarMenuContextoEstados, true);
+            window.addEventListener('resize', cerrarMenuContextoEstados);
+            document.addEventListener('keydown', function (ev) {
+                if (ev.key !== 'Escape') return;
+                var mm = document.getElementById('estadosCtxMenu');
+                if (mm && mm.classList.contains('open')) {
+                    cerrarMenuContextoEstados();
+                    ev.stopImmediatePropagation();
+                    return;
+                }
+                var fb = document.getElementById('formEstadoBackdrop');
+                if (fb && fb.classList.contains('open')) {
+                    fb.classList.remove('open');
+                    ev.stopImmediatePropagation();
+                    return;
+                }
+                var lb = document.getElementById('estadosBackdrop');
+                if (lb && lb.classList.contains('open')) {
+                    cerrarEstados();
+                    ev.stopImmediatePropagation();
+                }
+            });
+        }
     }
 
     // ---------- Editor de parámetros (skill: crear_editor_de_parametros) ----

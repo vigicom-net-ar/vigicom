@@ -5,9 +5,10 @@
 # URL servida:    https://cloud.vigicom.net.ar
 #
 # Uso:
-#   bash deploy.sh           # sync + recreate
-#   bash deploy.sh --rebuild # ademas reconstruye la imagen Docker
-#                            # (necesario si cambio docker/php/Dockerfile)
+#   bash deploy.sh           # solo sube los cambios (no recrea contenedor)
+#   bash deploy.sh --rebuild # reconstruye la imagen Docker y recrea el
+#                            # contenedor (necesario si cambio
+#                            # docker/php/Dockerfile o .env.production)
 # ============================================================
 
 set -e
@@ -104,20 +105,20 @@ ssh -i "$KEY" -o StrictHostKeyChecking=no \
 echo "  OK"
 echo ""
 
-# ---- 4. Rebuild (opcional) + force-recreate del contenedor ----
-# force-recreate siempre: Docker bind-montea .env.production por inodo, no por
-# path. El tar del paso 3 crea un inodo nuevo, asi que sin --force-recreate
-# el contenedor sigue viendo el .env.production viejo. Es barato (~2s).
+# ---- 4. Rebuild (opcional) ----
+# Sin --rebuild solo se suben los cambios: el codigo esta bind-monteado, asi
+# que los cambios en cloud/, api/, app/, etc. quedan visibles en el acto sin
+# necesidad de tocar el contenedor.
+# Con --rebuild se reconstruye la imagen y se recrea el contenedor. Ojo:
+# Docker bind-montea .env.production por inodo, asi que si cambio ese archivo
+# hay que correr --rebuild para que el contenedor lo vea.
 if [ "$REBUILD" = true ]; then
     echo "  Reconstruyendo imagen Docker y recreando contenedor..."
     ssh -i "$KEY" -o StrictHostKeyChecking=no "$USER@$HOST" \
         "cd '$BASE_REMOTE' && docker compose -f $COMPOSE_FILE build && docker compose -f $COMPOSE_FILE up -d --force-recreate"
     echo "  OK -- imagen reconstruida y contenedor levantado"
 else
-    echo "  Recreando contenedor..."
-    ssh -i "$KEY" -o StrictHostKeyChecking=no "$USER@$HOST" \
-        "cd '$BASE_REMOTE' && docker compose -f $COMPOSE_FILE up -d --force-recreate"
-    echo "  OK -- contenedor actualizado"
+    echo "  Sin --rebuild: solo se subieron los cambios (contenedor intacto)."
 fi
 echo ""
 

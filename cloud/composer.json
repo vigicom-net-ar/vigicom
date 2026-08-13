@@ -1,0 +1,13 @@
+{
+    "name": "vigicom/cloud",
+    "description": "Panel Cloud de Vigicom (dependencias PHP runtime).",
+    "type": "project",
+    "require": {
+        "php": ">=8.1",
+        "php-mqtt/client": "^2.1"
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "sort-packages": true
+    }
+}
